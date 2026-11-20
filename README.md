@@ -1,0 +1,75 @@
+# mesh-identity
+
+A self-contained, standalone Rust library for peer identity, offline in-person encounters, pairwise link disclosure, and Byzantine group admission governance.
+
+`mesh-identity` provides cryptographic identity and consensus building blocks without depending on centralized servers or external runtime engines.
+
+---
+
+## Architecture & Features
+
+The crate is designed with strict layering: Core identity is always built, with group governance and OpenPGP compatibility available as optional Cargo features.
+
+```
+mesh-identity
+├── Core (always enabled)      Identity, personas, in-person Encounter (SAS/QR/BLE), contacts, snapshots
+├── [groups]                   Byzantine group admission, rosters, quorum certificates, evidence, handle
+├── [openpgp]                  Pure-Rust OpenPGP key import and detached signing via rpgp
+└── [test-support]             Simulation-only authority and signing hooks for testing
+```
+
+### Feature Flags
+
+* `default = []`: Builds the lightweight Core identity library with zero group or OpenPGP dependencies.
+* `groups`: Enables group admission, PBFT-style roster consensus, quorum certificates, handle state machines, and voter locks.
+* `openpgp`: Enables OpenPGP interoperability powered by `rpgp` (pure Rust, MIT/Apache-2.0, zero C/OpenSSL dependencies).
+* `test-support`: Enables test-only simulation fixtures and reduced SAS campaign moduli. Never enabled in production.
+
+---
+
+## Core Capabilities
+
+### 1. Peer Identity & Encounters (Core)
+* **Local Personas:** Ed25519 signing keys and X25519 diffie-hellman key agreements.
+* **Offline Encounter Protocol:** Two-device mutual authentication over QR codes or chunked BLE frames with Short Authentication String (SAS) human verification.
+* **Pairwise Link Disclosure:** Proving and linking multiple local personas belonging to the same individual without global identifiers.
+* **Installation Persistence:** Atomic snapshot save/restore with deterministic CBOR (`cbor2`) ensuring state is bounded and restorable within a 64 MiB ceiling.
+
+### 2. Group Admission & Roster Governance (`groups`)
+* **Byzantine Agreement:** Quorum-based roster changes with prepare, commit, and round-change phases.
+* **Proof-Carrying Certificates:** Verifiable membership certificates supporting up to 192 members and 128 signers per phase.
+* **Equivocation Protection:** Persistent voter lock tables (`roster_locks`) preventing signers from issuing contradictory votes across restarts.
+* **Group Handle:** Complete high-level facade for creating groups, issuing invitations, voting, and processing incoming wire bytes.
+
+### 3. OpenPGP Interoperability (`openpgp`)
+* **Key Import:** Import existing Ed25519 OpenPGP secret keys into local `mesh-identity` personas.
+* **Detached Signatures:** Issue standard OpenPGP document signatures and peer certifications using the local identity.
+
+---
+
+## Building & Testing
+
+Requires Rust edition 2024.
+
+```bash
+# Build core library
+cargo build
+
+# Run core test suite (96 tests)
+cargo test
+
+# Build and test with group admission enabled (500+ tests)
+cargo test --features groups
+
+# Run full test matrix with all features and strict warnings denied
+cargo test --all-features
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
+---
+
+## Constraints
+
+* **Self-Contained:** Published dependencies only. No path or git dependencies.
+* **Standalone Architecture:** Completely decoupled from external domain logic; consumers interact purely through byte buffers, hashes, and minimal consumer-defined traits.
+* **Bounded Resources:** Enforces defensive ceilings on contact counts, seen transcripts, handoff bundles, and frame sizes to prevent memory exhaustion and DoS attacks.

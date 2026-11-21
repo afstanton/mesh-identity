@@ -16,6 +16,9 @@ part 'ceremony.dart';
 /// **Concurrency Note**: Instances wrap raw native pointers without internal locking.
 /// An instance must not be accessed concurrently across multiple Dart isolates.
 class MeshInstallation implements ffi.Finalizable {
+  /// Maximum number of signing key seeds allowed during restoration.
+  static const int maxRestoreSeeds = 2048;
+
   /// Generate a cryptographically secure 32-byte Ed25519 signing seed.
   ///
   /// Callers should retain this seed in secure storage (e.g. keychain / secure enclave)
@@ -73,6 +76,16 @@ class MeshInstallation implements ffi.Finalizable {
 
   ffi.Pointer<ffi.Void> _handle;
   bool _isPoisoned = false;
+  HandoffResult? _pendingHandoff;
+  AcceptHandoffResult? _pendingAccept;
+
+  /// Returns the pending [HandoffResult] if a prior [beginHandoff] produced a bundle
+  /// whose persistence failed or was not yet finalized.
+  HandoffResult? get pendingHandoff => _pendingHandoff;
+
+  /// Returns the pending [AcceptHandoffResult] if a prior [acceptHandoff] produced a result
+  /// whose persistence failed or was not yet finalized.
+  AcceptHandoffResult? get pendingAccept => _pendingAccept;
 
   /// Whether this installation has been explicitly closed.
   bool get isDisposed => _handle == ffi.nullptr;
@@ -173,6 +186,18 @@ class MeshInstallation implements ffi.Finalizable {
     });
   }
 
+  /// Configure the maximum number of identities allowed in this installation (up to 2048).
+  void setMaxIdentities(int limit) {
+    _checkDisposed();
+    if (limit < 1 || limit > maxRestoreSeeds) {
+      throw const InvalidArgumentsException(
+        'maxIdentities must be between 1 and 2048',
+      );
+    }
+    final res = mesh_installation_set_max_identities(_handle, limit);
+    _checkResult(res, 'Failed to set max identities');
+  }
+
   /// Add a new identity persona from a 32-byte [seed].
   ///
   /// Returns the newly added identity's 32-byte public key.
@@ -266,7 +291,7 @@ class MeshInstallation implements ffi.Finalizable {
     if (signingKeySeeds.isEmpty) {
       throw const InvalidArgumentsException('Signing seeds cannot be empty');
     }
-    if (signingKeySeeds.length > 2048) {
+    if (signingKeySeeds.length > maxRestoreSeeds) {
       throw const CapacityExceededException(
         'Signing seeds count exceeds maximum ceiling of 2048',
       );
@@ -502,7 +527,7 @@ class MeshInstallation implements ffi.Finalizable {
       mesh_buffer_free(ptr, len);
 
       return EncounterStartResult(
-        ceremony: EncounterCeremony._fromHandle(outCeremony.value),
+        ceremony: EncounterCeremony._fromHandle(outCeremony.value, this),
         offerPayload: payload,
       );
     });
@@ -522,7 +547,7 @@ class MeshInstallation implements ffi.Finalizable {
       final outCeremony = arena<ffi.Pointer<ffi.Void>>();
       final res = mesh_installation_open_scanner(_handle, nowMs, outCeremony);
       _checkResult(res, 'Failed to open encounter scanner');
-      return EncounterCeremony._fromHandle(outCeremony.value);
+      return EncounterCeremony._fromHandle(outCeremony.value, this);
     });
   }
 
@@ -944,6 +969,19 @@ class MeshInstallation implements ffi.Finalizable {
         'Recipient nonce must be exactly 32 bytes',
       );
     }
+
+    // If a previous handoff for the same recipient is pending (e.g. onPersist threw),
+    // retry the persistence step with the preserved bundle rather than failing with NotVotingDeviceException.
+    if (_pendingHandoff != null &&
+        _bytesEqual(_pendingHandoff!.bundle.recipient, recipientNonce)) {
+      if (onPersist != null) {
+        onPersist(_pendingHandoff!.snapshotBytes);
+      }
+      final result = _pendingHandoff!;
+      _pendingHandoff = null;
+      return result;
+    }
+
     final nowMs = (at ?? DateTime.now()).millisecondsSinceEpoch;
     if (nowMs < 0) {
       throw const InvalidArgumentsException('Timestamp must not be pre-1970');
@@ -982,14 +1020,18 @@ class MeshInstallation implements ffi.Finalizable {
           snapshotPtr.asTypedList(snapshotLen),
         );
 
+        final result = HandoffResult(
+          bundle: HandoffBundle.fromBytes(bundleBytes),
+          snapshotBytes: snapshotBytes,
+        );
+        _pendingHandoff = result;
+
         if (onPersist != null) {
           onPersist(snapshotBytes);
         }
 
-        return HandoffResult(
-          bundle: HandoffBundle.fromBytes(bundleBytes),
-          snapshotBytes: snapshotBytes,
-        );
+        _pendingHandoff = null;
+        return result;
       } finally {
         mesh_buffer_free(bundlePtr, bundleLen);
         mesh_buffer_free(snapshotPtr, snapshotLen);
@@ -1015,6 +1057,16 @@ class MeshInstallation implements ffi.Finalizable {
         bundle.rawBytes.length > HandoffBundle.maxBundleBytes) {
       throw const InvalidArgumentsException('Invalid handoff bundle size');
     }
+
+    if (_pendingAccept != null) {
+      if (onPersist != null) {
+        onPersist(_pendingAccept!.snapshotBytes);
+      }
+      final result = _pendingAccept!;
+      _pendingAccept = null;
+      return result;
+    }
+
     final nowMs = (at ?? DateTime.now()).millisecondsSinceEpoch;
     if (nowMs < 0) {
       throw const InvalidArgumentsException('Timestamp must not be pre-1970');
@@ -1044,13 +1096,18 @@ class MeshInstallation implements ffi.Finalizable {
         final snapshotBytes = Uint8List.fromList(
           snapshotPtr.asTypedList(snapshotLen),
         );
-        if (onPersist != null) {
-          onPersist(snapshotBytes);
-        }
-        return AcceptHandoffResult(
+        final result = AcceptHandoffResult(
           state: _parseVotingState(outNewState.value),
           snapshotBytes: snapshotBytes,
         );
+        _pendingAccept = result;
+
+        if (onPersist != null) {
+          onPersist(snapshotBytes);
+        }
+
+        _pendingAccept = null;
+        return result;
       } finally {
         mesh_buffer_free(snapshotPtr, snapshotLen);
       }
@@ -1069,4 +1126,14 @@ VotingState _parseVotingState(int code) {
     default:
       throw GenericMeshIdentityException('Unknown voting state code: $code');
   }
+}
+
+bool _bytesEqual(Uint8List? a, Uint8List? b) {
+  if (identical(a, b)) return true;
+  if (a == null || b == null) return false;
+  if (a.length != b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    if (a[i] != b[i]) return false;
+  }
+  return true;
 }

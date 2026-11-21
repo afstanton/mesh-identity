@@ -32,6 +32,12 @@ external int mesh_installation_selected(
   int outPkLen,
 );
 
+@ffi.Native<ffi.Int32 Function(ffi.Pointer<ffi.Void>, ffi.Size)>()
+external int mesh_installation_set_max_identities(
+  ffi.Pointer<ffi.Void> handle,
+  int limit,
+);
+
 @ffi.Native<ffi.Size Function(ffi.Pointer<ffi.Void>)>()
 external int mesh_installation_identities_count(ffi.Pointer<ffi.Void> handle);
 

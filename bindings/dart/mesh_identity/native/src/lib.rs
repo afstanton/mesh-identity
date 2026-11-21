@@ -202,6 +202,46 @@ pub unsafe extern "C" fn mesh_installation_free(handle: *mut MeshInstallationHan
     }));
 }
 
+/// Set the maximum number of identities allowed in this installation.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshInstallationHandle`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_installation_set_max_identities(
+    handle: *mut MeshInstallationHandle,
+    limit: usize,
+) -> i32 {
+    clear_last_error();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() {
+            set_last_error("null handle passed to mesh_installation_set_max_identities");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("installation handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        match handle.installation.set_max_identities(limit) {
+            Ok(()) => MESH_OK,
+            Err(e) => {
+                set_last_error(e.to_string());
+                map_installation_error(&e)
+            }
+        }
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle.is_null() {
+            unsafe {
+                (*handle).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
 /// Copy the 32-byte public key of the currently selected identity into `out_pk`.
 ///
 /// # Safety
@@ -1838,6 +1878,12 @@ pub unsafe extern "C" fn mesh_installation_begin_handoff(
             std::ptr::copy_nonoverlapping(recipient_ptr, recipient.as_mut_ptr(), 32);
         }
 
+        // Pre-validate that save_bytes succeeds before mutating voting state
+        if let Err(e) = handle.installation.save_bytes(now) {
+            set_last_error(e.to_string());
+            return MESH_ERR_INVALID_SNAPSHOT;
+        }
+
         match handle.installation.begin_handoff(recipient, |_, _| Ok(())) {
             Ok(bundle) => {
                 let snapshot = match handle.installation.save_bytes(now) {
@@ -1926,6 +1972,12 @@ pub unsafe extern "C" fn mesh_installation_accept_handoff(
                 return map_installation_error(&e);
             }
         };
+
+        // Pre-validate that save_bytes succeeds before mutating voting state
+        if let Err(e) = handle.installation.save_bytes(now) {
+            set_last_error(e.to_string());
+            return MESH_ERR_INVALID_SNAPSHOT;
+        }
 
         match handle.installation.accept_handoff(&bundle, |_| Ok(())) {
             Ok(state) => {
@@ -2142,8 +2194,47 @@ fn event_to_json(e: &mesh_identity::groups::handle::Event) -> EventJson {
             member: hex::encode(member),
         },
         Event::FrameRejected(r) => EventJson::FrameRejected {
-            reason: format!("{r:?}"),
+            reason: reason_to_str(*r).to_string(),
         },
+    }
+}
+
+fn reason_to_str(r: mesh_identity::groups::handle::Reason) -> &'static str {
+    use mesh_identity::groups::handle::Reason::*;
+    match r {
+        Malformed => "malformed",
+        TooLarge => "tooLarge",
+        UnknownTag => "unknownTag",
+        Unsupported => "unsupported",
+        NeedsAuthentication => "needsAuthentication",
+        Invalid => "invalid",
+        Full => "full",
+        Expired => "expired",
+        Stale => "stale",
+        UnknownContact => "unknownContact",
+        Unknown => "unknown",
+        Conflict => "conflict",
+    }
+}
+
+fn handle_error_to_str(err: &mesh_identity::groups::handle::HandleError) -> String {
+    use mesh_identity::groups::handle::HandleError::*;
+    match err {
+        Full => "group capacity exceeded".to_string(),
+        Invalid => "invalid argument or operation".to_string(),
+        UnknownOp => "unknown operation".to_string(),
+        Unknown => "unknown group or invitation".to_string(),
+        UnsupportedPolicy => "unsupported group policy".to_string(),
+        Ineligible => {
+            "identity is ineligible (not a member, not a verified contact, or gated)".to_string()
+        }
+        Installation(e) => format!("installation snapshot error: {e}"),
+        Group(e) => format!("group snapshot error: {e:?}"),
+        Malformed => "malformed group handle snapshot".to_string(),
+        UnsupportedVersion(v) => format!("unsupported group snapshot version: {v}"),
+        TooLarge => "group snapshot exceeds size ceiling".to_string(),
+        Duplicate => "duplicate group".to_string(),
+        Formation(f) => format!("formation error: {f:?}"),
     }
 }
 
@@ -2361,7 +2452,7 @@ pub unsafe extern "C" fn mesh_group_handle_create_group(
                 MESH_OK
             }
             Err(e) => {
-                set_last_error(format!("{e:?}"));
+                set_last_error(handle_error_to_str(&e));
                 map_handle_error(&e)
             }
         }
@@ -2424,7 +2515,7 @@ pub unsafe extern "C" fn mesh_group_handle_import_genesis(
                 MESH_OK
             }
             Err(e) => {
-                set_last_error(format!("{e:?}"));
+                set_last_error(handle_error_to_str(&e));
                 map_handle_error(&e)
             }
         }
@@ -2483,7 +2574,7 @@ pub unsafe extern "C" fn mesh_group_handle_invite(
                 MESH_OK
             }
             Err(e) => {
-                set_last_error(format!("{e:?}"));
+                set_last_error(handle_error_to_str(&e));
                 map_handle_error(&e)
             }
         }
@@ -2537,7 +2628,7 @@ pub unsafe extern "C" fn mesh_group_handle_accept(
                 MESH_OK
             }
             Err(e) => {
-                set_last_error(format!("{e:?}"));
+                set_last_error(handle_error_to_str(&e));
                 map_handle_error(&e)
             }
         }
@@ -2601,7 +2692,7 @@ pub unsafe extern "C" fn mesh_group_handle_accept_authenticated(
                 MESH_OK
             }
             Err(e) => {
-                set_last_error(format!("{e:?}"));
+                set_last_error(handle_error_to_str(&e));
                 map_handle_error(&e)
             }
         }
@@ -2650,7 +2741,7 @@ pub unsafe extern "C" fn mesh_group_handle_leave(
                 MESH_OK
             }
             Err(e) => {
-                set_last_error(format!("{e:?}"));
+                set_last_error(handle_error_to_str(&e));
                 map_handle_error(&e)
             }
         }
@@ -2981,7 +3072,7 @@ pub unsafe extern "C" fn mesh_group_handle_save(
                 MESH_OK
             }
             Err(e) => {
-                set_last_error(format!("{e:?}"));
+                set_last_error(handle_error_to_str(&e));
                 map_handle_error(&e)
             }
         }
@@ -3149,7 +3240,7 @@ pub unsafe extern "C" fn mesh_group_handle_resend(handle: *mut MeshGroupHandle, 
         {
             Ok(()) => MESH_OK,
             Err(e) => {
-                set_last_error(format!("{e:?}"));
+                set_last_error(handle_error_to_str(&e));
                 map_handle_error(&e)
             }
         }
@@ -3211,11 +3302,11 @@ pub unsafe extern "C" fn mesh_group_handle_op_state(
             },
             OpState::Rejected(r) => OpStateJson {
                 status: "Rejected".to_string(),
-                reason: Some(format!("{r:?}")),
+                reason: Some(reason_to_str(r).to_string()),
             },
             OpState::Retryable(r) => OpStateJson {
                 status: "Retryable".to_string(),
-                reason: Some(format!("{r:?}")),
+                reason: Some(reason_to_str(r).to_string()),
             },
         };
         let s = match serde_json::to_string(&op_json) {
@@ -3306,7 +3397,7 @@ pub unsafe extern "C" fn mesh_group_handle_restore(
                 MESH_OK
             }
             Err(e) => {
-                set_last_error(format!("{e:?}"));
+                set_last_error(handle_error_to_str(&e));
                 map_handle_error(&e)
             }
         }

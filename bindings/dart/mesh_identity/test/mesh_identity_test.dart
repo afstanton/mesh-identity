@@ -643,6 +643,26 @@ void main() {
         inst.dispose();
       },
     );
+
+    test(
+      'ceremony dispose cancels session on installation and permits restart',
+      () {
+        final seed = MeshInstallation.generateSeed();
+        final alice = MeshInstallation(seed: seed);
+        final now = DateTime.utc(2026, 6, 1, 12, 0, 0);
+
+        final start = alice.startEncounter(at: now);
+        // Disposing the ceremony directly cancels the ceremony on the installation
+        start.ceremony.dispose();
+
+        // Can immediately restart without CeremonyActiveException
+        final restart = alice.startEncounter(at: now);
+        expect(restart.offerPayload.isNotEmpty, isTrue);
+        restart.ceremony.dispose();
+
+        alice.dispose();
+      },
+    );
   });
 
   group('QrTransport', () {
@@ -895,21 +915,42 @@ void main() {
       },
     );
 
-    test('onPersist failure aborts handoff bundle return', () {
-      final seed = MeshInstallation.generateSeed();
-      final deviceA = MeshInstallation(seed: seed);
-      final nonceB = Uint8List(32)..fillRange(0, 32, 42);
+    test(
+      'onPersist failure preserves pending handoff and retry succeeds without NotVotingDeviceException',
+      () {
+        final seed = MeshInstallation.generateSeed();
+        final deviceA = MeshInstallation(seed: seed);
+        final nonceB = Uint8List(32)..fillRange(0, 32, 42);
 
-      expect(
-        () => deviceA.beginHandoff(
+        // First attempt fails at persistence callback
+        expect(
+          () => deviceA.beginHandoff(
+            nonceB,
+            onPersist: (_) => throw Exception('Disk write failed!'),
+          ),
+          throwsA(isA<Exception>()),
+        );
+
+        // Pending handoff is preserved on the instance
+        expect(deviceA.pendingHandoff, isNotNull);
+        expect(deviceA.pendingHandoff!.bundle.recipient, equals(nonceB));
+
+        // Retrying beginHandoff with the same recipient retries persistence and returns the bundle
+        var persistedBytes = Uint8List(0);
+        final retriedResult = deviceA.beginHandoff(
           nonceB,
-          onPersist: (_) => throw Exception('Disk write failed!'),
-        ),
-        throwsA(isA<Exception>()),
-      );
+          onPersist: (bytes) {
+            persistedBytes = bytes;
+          },
+        );
 
-      deviceA.dispose();
-    });
+        expect(retriedResult.bundle.recipient, equals(nonceB));
+        expect(persistedBytes.isNotEmpty, isTrue);
+        expect(deviceA.pendingHandoff, isNull);
+
+        deviceA.dispose();
+      },
+    );
 
     test('handoff rejects wrong recipient nonce', () {
       final seed = MeshInstallation.generateSeed();
@@ -1680,6 +1721,56 @@ void main() {
         expect(handle.selectedIdentity.length, equals(32));
 
         handle.dispose();
+      },
+    );
+
+    test('restores valid 65-persona group snapshot', () {
+      final seeds = List.generate(65, (_) => MeshInstallation.generateSeed());
+      final inst = MeshInstallation(seed: seeds[0]);
+      inst.setMaxIdentities(100);
+      for (var i = 1; i < 65; i++) {
+        inst.addIdentity(seeds[i]);
+      }
+      expect(inst.identities.length, equals(65));
+
+      final groupHandle = MeshGroupHandle.fromInstallation(inst);
+      final saveRes = groupHandle.save();
+
+      // Restoring with 65 seeds must succeed and not throw InvalidArgumentsException
+      final restored = MeshGroupHandle.restore(
+        snapshotBlob: saveRes.blob,
+        signingKeySeeds: seeds,
+      );
+      expect(restored.selectedIdentity.length, equals(32));
+
+      groupHandle.dispose();
+      restored.dispose();
+    });
+
+    test(
+      'group handle restored before confirmSaved has empty outgoing frames',
+      () {
+        final seed = MeshInstallation.generateSeed();
+        final handle = MeshGroupHandle(seed: seed);
+        final now = DateTime.utc(2026, 6, 1, 12, 0, 0);
+
+        // Create group
+        handle.createGroup();
+        // Phase 1: save snapshot to blob
+        final saveRes = handle.save(at: now);
+        // Disposed / restart without confirmSaved
+        handle.dispose();
+
+        // Restore from the unconfirmed snapshot
+        final restored = MeshGroupHandle.restore(
+          snapshotBlob: saveRes.blob,
+          signingKeySeeds: [seed],
+        );
+
+        // Unconfirmed operation frames are withheld and never released
+        expect(restored.takeOutgoing(), isEmpty);
+
+        restored.dispose();
       },
     );
   });

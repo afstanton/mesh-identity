@@ -28,7 +28,8 @@ class MeshGroupHandle implements ffi.Finalizable {
   /// Maximum allowed initial members when creating a group (192 members total).
   static const int maxGroupMembers = 192;
 
-  static const int _maxSeedsCeiling = 64;
+  /// Maximum number of signing key seeds allowed during restoration.
+  static const int maxRestoreSeeds = 2048;
 
   /// Create a fresh group handle initialized with a new root installation and persona.
   ///
@@ -96,10 +97,10 @@ class MeshGroupHandle implements ffi.Finalizable {
       );
     }
     if (signingKeySeeds.isEmpty ||
-        signingKeySeeds.length > _maxSeedsCeiling ||
+        signingKeySeeds.length > maxRestoreSeeds ||
         signingKeySeeds.any((s) => s.length != 32)) {
       throw const InvalidArgumentsException(
-        'Must provide 1..64 signing key seeds of exactly 32 bytes each',
+        'Must provide 1..2048 signing key seeds of exactly 32 bytes each',
       );
     }
 

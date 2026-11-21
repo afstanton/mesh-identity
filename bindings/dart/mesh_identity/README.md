@@ -171,6 +171,7 @@ final groupHandle = MeshGroupHandle.fromInstallation(installation);
 final opId = groupHandle.createGroup();
 
 // Two-phase commit outbox staging:
+// CRITICAL: Frames are strictly withheld and MUST NOT be sent before confirmSaved!
 // 1. Save the snapshot blob to durable storage
 final saveResult = groupHandle.save();
 await secureStorage.write('group_snapshot', saveResult.blob);
@@ -180,7 +181,7 @@ final events = groupHandle.confirmSaved(saveResult.token);
 final createdEvent = events.whereType<GroupCreatedEvent>().first;
 final groupId = createdEvent.groupId;
 
-// 3. Drain and send outgoing frames over the network
+// 3. Only now drain and send outgoing frames over the network
 final outgoingMessages = groupHandle.takeOutgoing();
 for (final msg in outgoingMessages) {
   await networkTransport.send(to: msg.to, tag: msg.tag, bytes: msg.bytes);

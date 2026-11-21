@@ -11,19 +11,22 @@ part of 'installation.dart';
 /// installation immediately and releases ceremony resources.
 class EncounterCeremony implements ffi.Finalizable {
   /// Internal constructor.
-  EncounterCeremony._(this._handle) {
+  EncounterCeremony._(this._handle, [this._installation]) {
     _finalizer.attach(this, _handle, detach: this);
   }
 
   /// Library-private factory to create a ceremony from a native handle.
-  static EncounterCeremony _fromHandle(ffi.Pointer<ffi.Void> handle) =>
-      EncounterCeremony._(handle);
+  static EncounterCeremony _fromHandle(
+    ffi.Pointer<ffi.Void> handle, [
+    MeshInstallation? installation,
+  ]) => EncounterCeremony._(handle, installation);
 
   static final ffi.NativeFinalizer _finalizer = ffi.NativeFinalizer(
     ffi.Native.addressOf(mesh_ceremony_free),
   );
 
   ffi.Pointer<ffi.Void> _handle;
+  final MeshInstallation? _installation;
 
   /// Whether this ceremony has been explicitly disposed or finalized.
   bool get isDisposed => _handle == ffi.nullptr;
@@ -38,14 +41,24 @@ class EncounterCeremony implements ffi.Finalizable {
     return _handle;
   }
 
-  /// Explicitly release native resources held by this ceremony.
+  /// Explicitly release native resources held by this ceremony and cancel the session
+  /// on the parent installation if active.
   ///
   /// Safe to call multiple times (idempotent).
-  /// Note: To abort an active ceremony on an installation, prefer calling
-  /// [MeshInstallation.cancelCeremony] so the installation state machine
-  /// is cancelled immediately without awaiting timeout.
   void dispose() {
     if (!isDisposed) {
+      final inst = _installation;
+      if (inst != null && !inst.isDisposed) {
+        try {
+          mesh_installation_cancel_ceremony(
+            inst._handle,
+            _handle,
+            DateTime.now().millisecondsSinceEpoch,
+          );
+        } catch (_) {
+          // Ignore if already cancelled or completed
+        }
+      }
       _finalizer.detach(this);
       mesh_ceremony_free(_handle);
       _handle = ffi.nullptr;

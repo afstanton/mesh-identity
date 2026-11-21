@@ -84,3 +84,38 @@ final class RateLimitedException extends MeshIdentityException {
 final class NoComparisonException extends MeshIdentityException {
   const NoComparisonException(super.message);
 }
+
+/// Thrown when this device does not hold the voting role for an identity (stopped or gated).
+final class NotVotingDeviceException extends MeshIdentityException {
+  const NotVotingDeviceException(super.message);
+}
+
+/// Thrown when a handoff bundle fails authentication or structural checks.
+final class InvalidHandoffException extends MeshIdentityException {
+  const InvalidHandoffException(super.message);
+}
+
+/// Thrown when a handoff bundle's counter is not strictly higher than this device's counter.
+final class StaleHandoffException extends MeshIdentityException {
+  const StaleHandoffException(super.message);
+}
+
+/// Thrown when a handoff bundle names a recipient device nonce different from this device's nonce.
+final class WrongHandoffRecipientException extends MeshIdentityException {
+  const WrongHandoffRecipientException(super.message);
+}
+
+/// Thrown when an identity's monotonic counter has reached maximum value (2^64 - 1).
+final class CounterExhaustedException extends MeshIdentityException {
+  const CounterExhaustedException(super.message);
+}
+
+/// Thrown when attempting a takeover from a device that is not in the Gated state.
+final class NotGatedException extends MeshIdentityException {
+  const NotGatedException(super.message);
+}
+
+/// Thrown when persisting a handoff record or snapshot fails during handoff.
+final class HandoffWriteFailedException extends MeshIdentityException {
+  const HandoffWriteFailedException(super.message);
+}

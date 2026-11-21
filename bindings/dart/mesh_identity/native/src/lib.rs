@@ -26,9 +26,17 @@ pub const MESH_ERR_PROTOCOL: i32 = -11;
 pub const MESH_ERR_RATE_LIMITED: i32 = -12;
 pub const MESH_ERR_INDEX_OUT_OF_BOUNDS: i32 = -13;
 pub const MESH_ERR_NO_COMPARISON: i32 = -14;
+pub const MESH_ERR_NOT_VOTING_DEVICE: i32 = -15;
+pub const MESH_ERR_INVALID_HANDOFF: i32 = -16;
+pub const MESH_ERR_STALE_HANDOFF: i32 = -17;
+pub const MESH_ERR_WRONG_HANDOFF_RECIPIENT: i32 = -18;
+pub const MESH_ERR_COUNTER_EXHAUSTED: i32 = -19;
+pub const MESH_ERR_NOT_GATED: i32 = -20;
+pub const MESH_ERR_HANDOFF_WRITE_FAILED: i32 = -21;
 
 const MAX_SEEDS_CEILING: usize = 2048;
 const MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024; // 64 MiB
+const MAX_HANDOFF_BUNDLE_BYTES: usize = 5 * 1024 * 1024; // 5 MiB
 
 thread_local! {
     static LAST_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -57,9 +65,14 @@ fn map_installation_error(err: &mesh_identity::session::installation::Error) -> 
         Error::DuplicateIdentity | Error::KeyPairMismatch | Error::InvalidConfiguration => {
             MESH_ERR_INVALID_ARG
         }
-        Error::InvalidContactLink | Error::InvalidRosterCheckpoint | Error::InvalidHandoff => {
-            MESH_ERR_INVALID_SNAPSHOT
-        }
+        Error::InvalidContactLink | Error::InvalidRosterCheckpoint => MESH_ERR_INVALID_SNAPSHOT,
+        Error::InvalidHandoff | Error::RosterSigningStateUnconfirmed => MESH_ERR_INVALID_HANDOFF,
+        Error::StaleHandoff => MESH_ERR_STALE_HANDOFF,
+        Error::WrongHandoffRecipient => MESH_ERR_WRONG_HANDOFF_RECIPIENT,
+        Error::NotVotingDevice => MESH_ERR_NOT_VOTING_DEVICE,
+        Error::NotGated => MESH_ERR_NOT_GATED,
+        Error::CounterExhausted => MESH_ERR_COUNTER_EXHAUSTED,
+        Error::HandoffWriteFailed => MESH_ERR_HANDOFF_WRITE_FAILED,
         Error::CeremonyActive => MESH_ERR_CEREMONY_ACTIVE,
         Error::StaleCeremony => MESH_ERR_STALE_CEREMONY,
         Error::Session(mesh_identity::session::SessionError::Attempt(_)) => MESH_ERR_RATE_LIMITED,
@@ -1399,6 +1412,623 @@ pub unsafe extern "C" fn mesh_installation_cancel_ceremony(
             }
         }
         set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+#[derive(Serialize)]
+struct TakeoverStatementJson {
+    identity: String,
+    counter: String,
+    nonce: String,
+    signature: String,
+}
+
+#[derive(Serialize)]
+struct HandoffBundleInspectJson {
+    identity: String,
+    counter: String,
+    recipient: String,
+    statement: TakeoverStatementJson,
+}
+
+fn voting_state_to_i32(state: mesh_identity::session::installation::VotingState) -> i32 {
+    use mesh_identity::session::installation::VotingState;
+    match state {
+        VotingState::Voting => 0,
+        VotingState::Stopped => 1,
+        VotingState::Gated => 2,
+    }
+}
+
+/// Retrieve or lazily generate the local device nonce (32 bytes).
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshInstallationHandle`.
+/// - `out_nonce` must be a valid, writable pointer to at least 32 bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_installation_device_nonce(
+    handle: *mut MeshInstallationHandle,
+    out_nonce: *mut u8,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() || out_nonce.is_null() {
+            set_last_error("invalid arguments passed to mesh_installation_device_nonce");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("installation handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        let nonce = handle.installation.device_nonce(&mut OsRng);
+        unsafe {
+            std::ptr::copy_nonoverlapping(nonce.as_ptr(), out_nonce, 32);
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Check the current device nonce without generating one if absent.
+///
+/// If a nonce exists, writes 32 bytes to `out_nonce` and sets `*out_has_nonce = true`.
+/// Otherwise, sets `*out_has_nonce = false`.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshInstallationHandle`.
+/// - `out_nonce` must point to at least 32 writable bytes.
+/// - `out_has_nonce` must point to a writable `bool`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_installation_current_device_nonce(
+    handle: *mut MeshInstallationHandle,
+    out_nonce: *mut u8,
+    out_has_nonce: *mut bool,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() || out_nonce.is_null() || out_has_nonce.is_null() {
+            set_last_error("invalid arguments passed to mesh_installation_current_device_nonce");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &*handle };
+        if handle.is_poisoned {
+            set_last_error("installation handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        match handle.installation.current_device_nonce() {
+            Some(nonce) => unsafe {
+                std::ptr::copy_nonoverlapping(nonce.as_ptr(), out_nonce, 32);
+                *out_has_nonce = true;
+            },
+            None => unsafe {
+                *out_has_nonce = false;
+            },
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Query the voting state of an identity (or selected identity if `key_ptr` is null).
+///
+/// Writes `0` (Voting), `1` (Stopped), or `2` (Gated) to `*out_state`.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshInstallationHandle`.
+/// - `out_state` must be a valid, non-null pointer to an `i32`.
+/// - If `key_ptr` is non-null, `key_len` must be 32.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_installation_voting_state(
+    handle: *mut MeshInstallationHandle,
+    key_ptr: *const u8,
+    key_len: usize,
+    out_state: *mut i32,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() || out_state.is_null() {
+            set_last_error("invalid arguments passed to mesh_installation_voting_state");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &*handle };
+        if handle.is_poisoned {
+            set_last_error("installation handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+
+        let state = if key_ptr.is_null() || key_len == 0 {
+            handle.installation.voting_state()
+        } else {
+            if key_len != 32 {
+                set_last_error("key must be exactly 32 bytes");
+                return MESH_ERR_INVALID_ARG;
+            }
+            let mut id = [0u8; 32];
+            unsafe {
+                std::ptr::copy_nonoverlapping(key_ptr, id.as_mut_ptr(), 32);
+            }
+            if !handle.installation.identities().contains(&id) {
+                set_last_error("unknown identity specified");
+                return MESH_ERR_UNKNOWN_IDENTITY;
+            }
+            handle.installation.voting_record(id).state
+        };
+
+        unsafe {
+            *out_state = voting_state_to_i32(state);
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Query the complete voting record of an identity (or selected identity if `key_ptr` is null).
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshInstallationHandle`.
+/// - `out_counter`, `out_state`, `out_holder`, `out_has_holder` must be valid, non-null writable pointers.
+/// - `out_holder` must point to at least 32 writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_installation_voting_record(
+    handle: *mut MeshInstallationHandle,
+    key_ptr: *const u8,
+    key_len: usize,
+    out_counter: *mut u64,
+    out_state: *mut i32,
+    out_holder: *mut u8,
+    out_has_holder: *mut bool,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null()
+            || out_counter.is_null()
+            || out_state.is_null()
+            || out_holder.is_null()
+            || out_has_holder.is_null()
+        {
+            set_last_error("invalid arguments passed to mesh_installation_voting_record");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &*handle };
+        if handle.is_poisoned {
+            set_last_error("installation handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+
+        let record = if key_ptr.is_null() || key_len == 0 {
+            handle
+                .installation
+                .voting_record(handle.installation.selected())
+        } else {
+            if key_len != 32 {
+                set_last_error("key must be exactly 32 bytes");
+                return MESH_ERR_INVALID_ARG;
+            }
+            let mut id = [0u8; 32];
+            unsafe {
+                std::ptr::copy_nonoverlapping(key_ptr, id.as_mut_ptr(), 32);
+            }
+            if !handle.installation.identities().contains(&id) {
+                set_last_error("unknown identity specified");
+                return MESH_ERR_UNKNOWN_IDENTITY;
+            }
+            handle.installation.voting_record(id)
+        };
+
+        unsafe {
+            *out_counter = record.counter;
+            *out_state = voting_state_to_i32(record.state);
+            match record.holder {
+                Some(h) => {
+                    std::ptr::copy_nonoverlapping(h.as_ptr(), out_holder, 32);
+                    *out_has_holder = true;
+                }
+                None => {
+                    *out_has_holder = false;
+                }
+            }
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Explicitly gate voting on this device.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshInstallationHandle`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_installation_gate_voting(handle: *mut MeshInstallationHandle) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() {
+            set_last_error("handle is null in mesh_installation_gate_voting");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("installation handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        handle.installation.gate_voting();
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Begin a takeover claim for the selected identity while in the Gated state.
+///
+/// Writes JSON string representing `TakeoverStatement` to `*out_json`.
+/// Must be freed using `mesh_string_free`.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshInstallationHandle`.
+/// - `out_json` must be a valid, non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_installation_begin_takeover(
+    handle: *mut MeshInstallationHandle,
+    floor: u64,
+    out_json: *mut *mut c_char,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() || out_json.is_null() {
+            set_last_error("invalid arguments passed to mesh_installation_begin_takeover");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("installation handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+
+        match handle.installation.begin_takeover(&mut OsRng, floor) {
+            Ok(statement) => {
+                let json = TakeoverStatementJson {
+                    identity: hex::encode(statement.identity),
+                    counter: statement.counter.to_string(),
+                    nonce: hex::encode(statement.nonce),
+                    signature: hex::encode(statement.signature),
+                };
+                let s = match serde_json::to_string(&json) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        set_last_error(e.to_string());
+                        return MESH_ERR_INTERNAL;
+                    }
+                };
+                let c_str = match CString::new(s) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        set_last_error(e.to_string());
+                        return MESH_ERR_INTERNAL;
+                    }
+                };
+                unsafe {
+                    *out_json = c_str.into_raw();
+                }
+                MESH_OK
+            }
+            Err(e) => {
+                set_last_error(e.to_string());
+                map_installation_error(&e)
+            }
+        }
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Begin a handoff of the selected identity's voting role to the recipient device nonce.
+///
+/// On success, the local device is permanently Stopped at this counter, and the signed
+/// `HandoffBundle` bytes are returned in `*out_bundle_ptr` and `*out_bundle_len`.
+/// Simultaneously, the updated installation snapshot recording this Stopped role is
+/// generated and returned in `*out_snapshot_ptr` and `*out_snapshot_len`.
+/// Both buffers must be freed with `mesh_buffer_free`.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshInstallationHandle`.
+/// - `recipient_ptr` must point to at least `recipient_len` readable bytes (must be 32).
+/// - `out_bundle_ptr`, `out_bundle_len`, `out_snapshot_ptr`, and `out_snapshot_len` must be valid, non-null writable pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_installation_begin_handoff(
+    handle: *mut MeshInstallationHandle,
+    recipient_ptr: *const u8,
+    recipient_len: usize,
+    now: u64,
+    out_bundle_ptr: *mut *mut u8,
+    out_bundle_len: *mut usize,
+    out_snapshot_ptr: *mut *mut u8,
+    out_snapshot_len: *mut usize,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null()
+            || recipient_ptr.is_null()
+            || recipient_len != 32
+            || out_bundle_ptr.is_null()
+            || out_bundle_len.is_null()
+            || out_snapshot_ptr.is_null()
+            || out_snapshot_len.is_null()
+        {
+            set_last_error("invalid arguments passed to mesh_installation_begin_handoff");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("installation handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+
+        let mut recipient = [0u8; 32];
+        unsafe {
+            std::ptr::copy_nonoverlapping(recipient_ptr, recipient.as_mut_ptr(), 32);
+        }
+
+        match handle.installation.begin_handoff(recipient, |_, _| Ok(())) {
+            Ok(bundle) => {
+                let snapshot = match handle.installation.save_bytes(now) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        set_last_error(e.to_string());
+                        return MESH_ERR_INVALID_SNAPSHOT;
+                    }
+                };
+                let mut bundle_bytes = bundle.to_bytes().into_boxed_slice();
+                let mut snapshot_bytes = snapshot.into_boxed_slice();
+                unsafe {
+                    *out_bundle_len = bundle_bytes.len();
+                    *out_bundle_ptr = bundle_bytes.as_mut_ptr();
+                    *out_snapshot_len = snapshot_bytes.len();
+                    *out_snapshot_ptr = snapshot_bytes.as_mut_ptr();
+                }
+                std::mem::forget(bundle_bytes);
+                std::mem::forget(snapshot_bytes);
+                MESH_OK
+            }
+            Err(e) => {
+                set_last_error(e.to_string());
+                map_installation_error(&e)
+            }
+        }
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Accept an authenticated handoff bundle addressed to this device.
+///
+/// On success, merges voter locks and transitions to `Voting` (or `Gated` if conflict).
+/// Writes resulting `VotingState` integer to `*out_new_state`, and writes the updated
+/// post-handoff installation snapshot to `*out_snapshot_ptr` and `*out_snapshot_len`.
+/// The snapshot buffer must be freed with `mesh_buffer_free`.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshInstallationHandle`.
+/// - `bundle_ptr` must point to at least `bundle_len` readable bytes.
+/// - `out_new_state`, `out_snapshot_ptr`, and `out_snapshot_len` must be valid, non-null writable pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_installation_accept_handoff(
+    handle: *mut MeshInstallationHandle,
+    bundle_ptr: *const u8,
+    bundle_len: usize,
+    now: u64,
+    out_new_state: *mut i32,
+    out_snapshot_ptr: *mut *mut u8,
+    out_snapshot_len: *mut usize,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null()
+            || bundle_ptr.is_null()
+            || bundle_len == 0
+            || bundle_len > MAX_HANDOFF_BUNDLE_BYTES
+            || out_new_state.is_null()
+            || out_snapshot_ptr.is_null()
+            || out_snapshot_len.is_null()
+        {
+            set_last_error("invalid arguments passed to mesh_installation_accept_handoff");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("installation handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+
+        let bytes = unsafe { slice::from_raw_parts(bundle_ptr, bundle_len) };
+        let bundle = match mesh_identity::session::installation::HandoffBundle::from_bytes(bytes) {
+            Ok(b) => b,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return map_installation_error(&e);
+            }
+        };
+
+        match handle.installation.accept_handoff(&bundle, |_| Ok(())) {
+            Ok(state) => {
+                let snapshot = match handle.installation.save_bytes(now) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        set_last_error(e.to_string());
+                        return MESH_ERR_INVALID_SNAPSHOT;
+                    }
+                };
+                let mut snapshot_bytes = snapshot.into_boxed_slice();
+                unsafe {
+                    *out_new_state = voting_state_to_i32(state);
+                    *out_snapshot_len = snapshot_bytes.len();
+                    *out_snapshot_ptr = snapshot_bytes.as_mut_ptr();
+                }
+                std::mem::forget(snapshot_bytes);
+                MESH_OK
+            }
+            Err(e) => {
+                set_last_error(e.to_string());
+                map_installation_error(&e)
+            }
+        }
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Inspect a serialized handoff bundle without an installation handle.
+///
+/// Returns JSON representing the bundle header and takeover statement to `*out_json`.
+/// Must be freed using `mesh_string_free`.
+///
+/// # Safety
+///
+/// - `bundle_ptr` must point to at least `bundle_len` readable bytes.
+/// - `out_json` must be a valid, non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_handoff_bundle_inspect(
+    bundle_ptr: *const u8,
+    bundle_len: usize,
+    out_json: *mut *mut c_char,
+) -> i32 {
+    clear_last_error();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if bundle_ptr.is_null()
+            || bundle_len == 0
+            || bundle_len > MAX_HANDOFF_BUNDLE_BYTES
+            || out_json.is_null()
+        {
+            set_last_error("invalid arguments passed to mesh_handoff_bundle_inspect");
+            return MESH_ERR_INVALID_ARG;
+        }
+
+        let bytes = unsafe { slice::from_raw_parts(bundle_ptr, bundle_len) };
+        let bundle = match mesh_identity::session::installation::HandoffBundle::from_bytes(bytes) {
+            Ok(b) => b,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return map_installation_error(&e);
+            }
+        };
+
+        let statement = match bundle.statement() {
+            Ok(st) => st,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return map_installation_error(&e);
+            }
+        };
+
+        let inspect = HandoffBundleInspectJson {
+            identity: hex::encode(bundle.identity()),
+            counter: bundle.counter().to_string(),
+            recipient: hex::encode(statement.nonce),
+            statement: TakeoverStatementJson {
+                identity: hex::encode(statement.identity),
+                counter: statement.counter.to_string(),
+                nonce: hex::encode(statement.nonce),
+                signature: hex::encode(statement.signature),
+            },
+        };
+
+        let s = match serde_json::to_string(&inspect) {
+            Ok(s) => s,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+        let c_str = match CString::new(s) {
+            Ok(c) => c,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+        unsafe {
+            *out_json = c_str.into_raw();
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        set_last_error("native panic caught at FFI boundary");
         MESH_ERR_PANIC
     })
 }

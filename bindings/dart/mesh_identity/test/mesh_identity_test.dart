@@ -676,4 +676,348 @@ void main() {
       );
     });
   });
+
+  group('Device-to-device handoff', () {
+    test('lazily creates and returns persistent device nonce', () {
+      final inst = MeshInstallation(seed: MeshInstallation.generateSeed());
+      expect(inst.getCurrentDeviceNonce(), isNull);
+
+      final nonce = inst.getDeviceNonce();
+      expect(nonce.length, equals(32));
+      expect(inst.getCurrentDeviceNonce(), equals(nonce));
+
+      // Subsequent calls return the same nonce
+      final nonce2 = inst.getDeviceNonce();
+      expect(nonce2, equals(nonce));
+
+      inst.dispose();
+    });
+
+    test('initial voting record and state is voting at counter 0', () {
+      final inst = MeshInstallation(seed: MeshInstallation.generateSeed());
+      expect(inst.getVotingState(), equals(VotingState.voting));
+
+      final record = inst.getVotingRecord();
+      expect(record.counter, equals(BigInt.zero));
+      expect(record.state, equals(VotingState.voting));
+      expect(record.holder, isNull);
+
+      // Explicit identityKey matches default
+      final idKey = inst.selectedIdentity;
+      expect(
+        inst.getVotingState(identityKey: idKey),
+        equals(VotingState.voting),
+      );
+      expect(inst.getVotingRecord(identityKey: idKey), equals(record));
+
+      inst.dispose();
+    });
+
+    test('validates identity key arguments on voting query', () {
+      final inst = MeshInstallation(seed: MeshInstallation.generateSeed());
+      final badKey = Uint8List(16);
+
+      expect(
+        () => inst.getVotingState(identityKey: badKey),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+      expect(
+        () => inst.getVotingRecord(identityKey: badKey),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+
+      final unknownKey = Uint8List(32)..fillRange(0, 32, 99);
+      expect(
+        () => inst.getVotingState(identityKey: unknownKey),
+        throwsA(isA<UnknownIdentityException>()),
+      );
+      expect(
+        () => inst.getVotingRecord(identityKey: unknownKey),
+        throwsA(isA<UnknownIdentityException>()),
+      );
+
+      inst.dispose();
+    });
+
+    test('gate voting affects all owned identities and clears permits', () {
+      final rootSeed = MeshInstallation.generateSeed();
+      final inst = MeshInstallation(seed: rootSeed);
+      final rootKey = inst.selectedIdentity;
+
+      final secondSeed = Uint8List(32)..fillRange(0, 32, 7);
+      final secondKey = inst.addIdentity(secondSeed);
+
+      // Both start as voting
+      expect(
+        inst.getVotingState(identityKey: rootKey),
+        equals(VotingState.voting),
+      );
+      expect(
+        inst.getVotingState(identityKey: secondKey),
+        equals(VotingState.voting),
+      );
+
+      // gateVoting gates ALL owned identities
+      inst.gateVoting();
+      expect(
+        inst.getVotingState(identityKey: rootKey),
+        equals(VotingState.gated),
+      );
+      expect(
+        inst.getVotingState(identityKey: secondKey),
+        equals(VotingState.gated),
+      );
+
+      inst.dispose();
+    });
+
+    test('gate voting and begin takeover flow with 64-bit unsigned BigInt', () {
+      final inst = MeshInstallation(seed: MeshInstallation.generateSeed());
+
+      // Attempting takeover when voting throws NotGatedException
+      expect(() => inst.beginTakeover(), throwsA(isA<NotGatedException>()));
+
+      // Gate voting transitions state to gated
+      inst.gateVoting();
+      expect(inst.getVotingState(), equals(VotingState.gated));
+      expect(inst.getVotingRecord().state, equals(VotingState.gated));
+
+      // Attempting takeover with negative floor throws InvalidArgumentsException
+      expect(
+        () => inst.beginTakeover(floor: -1),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+
+      // Begin takeover succeeds from gated state
+      final takeover = inst.beginTakeover(floor: 10);
+      expect(takeover.identity, equals(inst.selectedIdentity));
+      expect(takeover.counter, greaterThan(BigInt.from(10)));
+      expect(takeover.nonce, equals(inst.getDeviceNonce()));
+      expect(takeover.signature.length, equals(64));
+
+      // Installation updates counter and holder, remaining gated until group recognition
+      expect(inst.getVotingState(), equals(VotingState.gated));
+      final newRecord = inst.getVotingRecord();
+      expect(newRecord.state, equals(VotingState.gated));
+      expect(newRecord.counter, equals(takeover.counter));
+      expect(newRecord.holder, equals(inst.getDeviceNonce()));
+
+      // High 64-bit counter (2^63 - 1) advances to 2^63 without double-to-int cast error
+      final largeTakeover = inst.beginTakeover(floor: 0x7fffffffffffffff);
+      final expectedLarge = BigInt.parse('9223372036854775808');
+      expect(largeTakeover.counter, equals(expectedLarge));
+      expect(inst.getVotingRecord().counter, equals(expectedLarge));
+
+      inst.dispose();
+    });
+
+    test(
+      'executes clean device-to-device handoff with durable persistence across restart',
+      () {
+        final seed = MeshInstallation.generateSeed();
+        final deviceA = MeshInstallation(seed: seed);
+        final deviceB = MeshInstallation(seed: seed);
+
+        final nonceB = deviceB.getDeviceNonce();
+
+        // Device A begins handoff to Device B with onPersist verification
+        var persistACalled = false;
+        final handoffResult = deviceA.beginHandoff(
+          nonceB,
+          onPersist: (bytes) {
+            persistACalled = true;
+            expect(bytes.isNotEmpty, isTrue);
+          },
+        );
+        expect(persistACalled, isTrue);
+
+        final bundle = handoffResult.bundle;
+        expect(bundle.identity, equals(deviceA.selectedIdentity));
+        expect(bundle.counter, equals(BigInt.one));
+        expect(bundle.recipient, equals(nonceB));
+        expect(bundle.statement.counter, equals(BigInt.one));
+        expect(bundle.statement.identity, equals(deviceA.selectedIdentity));
+        expect(bundle.statement.nonce, equals(nonceB));
+
+        // Device A is now stopped permanently at counter 1
+        expect(deviceA.getVotingState(), equals(VotingState.stopped));
+        final recA = deviceA.getVotingRecord();
+        expect(recA.state, equals(VotingState.stopped));
+        expect(recA.counter, equals(BigInt.one));
+        expect(recA.holder, equals(nonceB));
+
+        // Device A cannot begin another handoff (throws NotVotingDeviceException)
+        expect(
+          () => deviceA.beginHandoff(nonceB),
+          throwsA(isA<NotVotingDeviceException>()),
+        );
+
+        // Device B accepts the handoff bundle with onPersist verification
+        var persistBCalled = false;
+        final acceptResult = deviceB.acceptHandoff(
+          bundle,
+          onPersist: (bytes) {
+            persistBCalled = true;
+            expect(bytes.isNotEmpty, isTrue);
+          },
+        );
+        expect(persistBCalled, isTrue);
+        expect(acceptResult.state, equals(VotingState.voting));
+        expect(deviceB.getVotingState(), equals(VotingState.voting));
+
+        final recB = deviceB.getVotingRecord();
+        expect(recB.state, equals(VotingState.voting));
+        expect(recB.counter, equals(BigInt.one));
+        expect(recB.holder, equals(nonceB));
+
+        // Simulate crash & restart from persisted snapshots:
+        // Restored Device A must be Stopped at counter 1
+        final restoredA = MeshInstallation.restore(
+          snapshotBytes: handoffResult.snapshotBytes,
+          signingKeySeeds: [seed],
+        );
+        expect(restoredA.getVotingState(), equals(VotingState.stopped));
+        expect(restoredA.getVotingRecord().counter, equals(BigInt.one));
+
+        // Restored Device B must be Voting at counter 1 with nonceB preserved
+        final restoredB = MeshInstallation.restore(
+          snapshotBytes: acceptResult.snapshotBytes,
+          signingKeySeeds: [seed],
+        );
+        expect(restoredB.getVotingState(), equals(VotingState.voting));
+        expect(restoredB.getVotingRecord().counter, equals(BigInt.one));
+        expect(restoredB.getVotingRecord().holder, equals(nonceB));
+
+        deviceA.dispose();
+        deviceB.dispose();
+        restoredA.dispose();
+        restoredB.dispose();
+      },
+    );
+
+    test('onPersist failure aborts handoff bundle return', () {
+      final seed = MeshInstallation.generateSeed();
+      final deviceA = MeshInstallation(seed: seed);
+      final nonceB = Uint8List(32)..fillRange(0, 32, 42);
+
+      expect(
+        () => deviceA.beginHandoff(
+          nonceB,
+          onPersist: (_) => throw Exception('Disk write failed!'),
+        ),
+        throwsA(isA<Exception>()),
+      );
+
+      deviceA.dispose();
+    });
+
+    test('handoff rejects wrong recipient nonce', () {
+      final seed = MeshInstallation.generateSeed();
+      final deviceA = MeshInstallation(seed: seed);
+      final deviceB = MeshInstallation(seed: seed);
+      final deviceC = MeshInstallation(seed: seed);
+
+      final nonceB = deviceB.getDeviceNonce();
+      final handoffResult = deviceA.beginHandoff(nonceB);
+
+      // Device C has different nonce, attempting to accept throws WrongHandoffRecipientException
+      deviceC.getDeviceNonce();
+      expect(
+        () => deviceC.acceptHandoff(handoffResult.bundle),
+        throwsA(isA<WrongHandoffRecipientException>()),
+      );
+
+      deviceA.dispose();
+      deviceB.dispose();
+      deviceC.dispose();
+    });
+
+    test('handoff rejects stale counter', () {
+      final seed = MeshInstallation.generateSeed();
+      final deviceA = MeshInstallation(seed: seed);
+      final deviceB = MeshInstallation(seed: seed);
+
+      final nonceB = deviceB.getDeviceNonce();
+      final handoffResult = deviceA.beginHandoff(nonceB);
+
+      // Advance deviceB counter past bundle.counter via gateVoting + beginTakeover
+      deviceB.gateVoting();
+      deviceB.beginTakeover(floor: 5);
+      expect(
+        deviceB.getVotingRecord().counter,
+        greaterThan(handoffResult.bundle.counter),
+      );
+
+      // Attempting to accept bundle with counter <= current.counter throws StaleHandoffException
+      expect(
+        () => deviceB.acceptHandoff(handoffResult.bundle),
+        throwsA(isA<StaleHandoffException>()),
+      );
+
+      deviceA.dispose();
+      deviceB.dispose();
+    });
+
+    test('handoff bundle roundtrip serialization and inspection', () {
+      final seed = MeshInstallation.generateSeed();
+      final deviceA = MeshInstallation(seed: seed);
+      final recipientNonce = Uint8List(32)..fillRange(0, 32, 7);
+
+      final handoffResult = deviceA.beginHandoff(recipientNonce);
+      final bundle = handoffResult.bundle;
+      final rawBytes = bundle.toBytes();
+
+      final reloaded = HandoffBundle.fromBytes(rawBytes);
+      expect(reloaded.identity, equals(bundle.identity));
+      expect(reloaded.counter, equals(bundle.counter));
+      expect(reloaded.recipient, equals(bundle.recipient));
+      expect(reloaded.statement.signature, equals(bundle.statement.signature));
+      expect(reloaded, equals(bundle));
+      expect(reloaded.hashCode, equals(bundle.hashCode));
+
+      deviceA.dispose();
+    });
+
+    test('enforces defensive bounds on handoff inputs and bundles', () {
+      final inst = MeshInstallation(seed: MeshInstallation.generateSeed());
+
+      // Reject invalid recipient nonce length
+      expect(
+        () => inst.beginHandoff(Uint8List(16)),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+
+      // Reject empty handoff bundle
+      expect(
+        () => HandoffBundle.fromBytes(Uint8List(0)),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+
+      // Reject oversized handoff bundle (> 5 MiB)
+      final huge = Uint8List(HandoffBundle.maxBundleBytes + 1);
+      expect(
+        () => HandoffBundle.fromBytes(huge),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+
+      inst.dispose();
+    });
+
+    test('handoff methods respect disposed installation', () {
+      final inst = MeshInstallation(seed: MeshInstallation.generateSeed());
+      final nonce = inst.getDeviceNonce();
+      inst.dispose();
+
+      expect(() => inst.getDeviceNonce(), throwsA(isA<DisposedException>()));
+      expect(
+        () => inst.getCurrentDeviceNonce(),
+        throwsA(isA<DisposedException>()),
+      );
+      expect(() => inst.getVotingState(), throwsA(isA<DisposedException>()));
+      expect(() => inst.getVotingRecord(), throwsA(isA<DisposedException>()));
+      expect(() => inst.gateVoting(), throwsA(isA<DisposedException>()));
+      expect(() => inst.beginTakeover(), throwsA(isA<DisposedException>()));
+      expect(() => inst.beginHandoff(nonce), throwsA(isA<DisposedException>()));
+    });
+  });
 }

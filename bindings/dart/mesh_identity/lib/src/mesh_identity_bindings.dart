@@ -326,6 +326,134 @@ external int mesh_installation_cancel_ceremony(
   int now,
 );
 
+@ffi.Native<ffi.Int32 Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Uint8>)>()
+external int mesh_installation_device_nonce(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Uint8> outNonce,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Pointer<ffi.Bool>,
+  )
+>()
+external int mesh_installation_current_device_nonce(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Uint8> outNonce,
+  ffi.Pointer<ffi.Bool> outHasNonce,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Int32>,
+  )
+>()
+external int mesh_installation_voting_state(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Uint8> keyPtr,
+  int keyLen,
+  ffi.Pointer<ffi.Int32> outState,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Uint64>,
+    ffi.Pointer<ffi.Int32>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Pointer<ffi.Bool>,
+  )
+>()
+external int mesh_installation_voting_record(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Uint8> keyPtr,
+  int keyLen,
+  ffi.Pointer<ffi.Uint64> outCounter,
+  ffi.Pointer<ffi.Int32> outState,
+  ffi.Pointer<ffi.Uint8> outHolder,
+  ffi.Pointer<ffi.Bool> outHasHolder,
+);
+
+@ffi.Native<ffi.Int32 Function(ffi.Pointer<ffi.Void>)>()
+external int mesh_installation_gate_voting(ffi.Pointer<ffi.Void> handle);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Pointer<ffi.Char>>,
+  )
+>()
+external int mesh_installation_begin_takeover(
+  ffi.Pointer<ffi.Void> handle,
+  int floor,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> outJson,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
+    ffi.Pointer<ffi.Size>,
+    ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
+    ffi.Pointer<ffi.Size>,
+  )
+>()
+external int mesh_installation_begin_handoff(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Uint8> recipientPtr,
+  int recipientLen,
+  int now,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> outBundlePtr,
+  ffi.Pointer<ffi.Size> outBundleLen,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> outSnapshotPtr,
+  ffi.Pointer<ffi.Size> outSnapshotLen,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Int32>,
+    ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
+    ffi.Pointer<ffi.Size>,
+  )
+>()
+external int mesh_installation_accept_handoff(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Uint8> bundlePtr,
+  int bundleLen,
+  int now,
+  ffi.Pointer<ffi.Int32> outNewState,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> outSnapshotPtr,
+  ffi.Pointer<ffi.Size> outSnapshotLen,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Pointer<ffi.Char>>,
+  )
+>()
+external int mesh_handoff_bundle_inspect(
+  ffi.Pointer<ffi.Uint8> bundlePtr,
+  int bundleLen,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> outJson,
+);
+
 /// Utility for querying last native errors and checking call results.
 abstract final class MeshIdentityBindings {
   static const int meshOk = 0;
@@ -343,6 +471,13 @@ abstract final class MeshIdentityBindings {
   static const int meshErrRateLimited = -12;
   static const int meshErrIndexOutOfBounds = -13;
   static const int meshErrNoComparison = -14;
+  static const int meshErrNotVotingDevice = -15;
+  static const int meshErrInvalidHandoff = -16;
+  static const int meshErrStaleHandoff = -17;
+  static const int meshErrWrongHandoffRecipient = -18;
+  static const int meshErrCounterExhausted = -19;
+  static const int meshErrNotGated = -20;
+  static const int meshErrHandoffWriteFailed = -21;
 
   /// Retrieve the last recorded error string from native TLS.
   static String? getLastError() {
@@ -387,6 +522,20 @@ abstract final class MeshIdentityBindings {
         throw IndexOutOfBoundsException(errText);
       case meshErrNoComparison:
         throw NoComparisonException(errText);
+      case meshErrNotVotingDevice:
+        throw NotVotingDeviceException(errText);
+      case meshErrInvalidHandoff:
+        throw InvalidHandoffException(errText);
+      case meshErrStaleHandoff:
+        throw StaleHandoffException(errText);
+      case meshErrWrongHandoffRecipient:
+        throw WrongHandoffRecipientException(errText);
+      case meshErrCounterExhausted:
+        throw CounterExhaustedException(errText);
+      case meshErrNotGated:
+        throw NotGatedException(errText);
+      case meshErrHandoffWriteFailed:
+        throw HandoffWriteFailedException(errText);
       default:
         throw GenericMeshIdentityException(errText);
     }

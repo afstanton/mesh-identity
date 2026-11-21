@@ -12,7 +12,8 @@ Built using **Dart Native Assets** (`dart:ffi`), compiling the native Rust engin
 - **Multiple Personas**: Add, select, and manage multiple pseudonymous local personas within a single node.
 - **Durable Snapshots**: Byte-for-byte deterministic serialization and authenticated checkpoint restoration.
 - **Contact Management**: Private local contact records, peer public key importation, and administrative blocking.
-- **Memory Safety & Zeroization**: Native panics are caught at the FFI boundary, pointers and lengths are strictly bounded before allocation, and native seed buffers are zeroized upon release. (Callers should zeroize their own `Uint8List` seeds with `fillRange(0, 32, 0)` when no longer needed.)
+- **Device-to-Device Handoff**: Monotonic voting role migration, voter lock transfer, gating, and signed takeover statements across physical devices.
+- **Memory Safety & Zeroization**: Native panics are caught at the FFI boundary, pointers and lengths are strictly bounded before allocation, and native memory buffers for seeds are securely zeroized upon release. (Callers are responsible for zeroizing their own `Uint8List` seed copies with `fillRange(0, 32, 0)` when no longer needed.)
 - **Concurrency**: Instances wrap raw native pointers without internal locks; do not access the same `MeshInstallation` concurrently across multiple isolates.
 
 ---
@@ -126,6 +127,39 @@ final bobContact = bob.confirmAndSave(bobCeremony, aliceSas.code);
 assert(aliceContact.isVerified && bobContact.isVerified);
 ```
 
+### 6. Device-to-Device Handoff
+
+Transfer an identity's voting role from an old device to a new device with monotonic counters and signed handoff bundles:
+
+```dart
+// Old device is currently in VotingState.voting
+assert(oldDevice.getVotingState() == VotingState.voting);
+
+// New device generates its unique physical device nonce and saves it
+final newDeviceNonce = newDevice.getDeviceNonce();
+await secureStorage.write('device_b_snapshot', newDevice.save());
+
+// Old device creates a handoff bundle and produces the post-handoff snapshot.
+// The snapshot MUST be persisted BEFORE the bundle is transmitted to prevent equivocation.
+final handoff = oldDevice.beginHandoff(
+  newDeviceNonce,
+  onPersist: (snapshotBytes) => secureStorage.writeSync('device_a_snapshot', snapshotBytes),
+);
+assert(oldDevice.getVotingState() == VotingState.stopped);
+
+// Bundle can be serialized and transferred over QR, local network, or BLE
+final rawBytes = handoff.bundle.toBytes();
+final receivedBundle = HandoffBundle.fromBytes(rawBytes);
+
+// New device accepts the bundle, assumes the voting role, and persists merged locks
+final acceptResult = newDevice.acceptHandoff(
+  receivedBundle,
+  onPersist: (snapshotBytes) => secureStorage.writeSync('device_b_snapshot', snapshotBytes),
+);
+assert(acceptResult.state == VotingState.voting);
+assert(newDevice.getVotingRecord().counter == handoff.bundle.counter);
+```
+
 ---
 
 ## Roadmap
@@ -133,7 +167,7 @@ assert(aliceContact.isVerified && bobContact.isVerified);
 This package is being built in verified, incremental slices:
 - [x] **Slice 1**: Installation lifecycle, personas, snapshots, contact store, and defensive C-FFI boundary.
 - [x] **Slice 2**: Cryptographic Encounter protocol (initiator / responder, SAS verification, QR transport).
-- [ ] **Slice 3**: Device-to-device handoff (identity migration and voter lock transfer).
+- [x] **Slice 3**: Device-to-device handoff (identity migration and voter lock transfer).
 - [ ] **Slice 4**: Byzantine group admission governance, voting ceremonies, and state machines.
 - [ ] **Slice 5**: OpenPGP cross-signing and trust bridging.
 

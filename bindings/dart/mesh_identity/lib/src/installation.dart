@@ -735,4 +735,324 @@ class MeshInstallation implements ffi.Finalizable {
       ceremony.dispose();
     }
   }
+
+  /// Returns the persistent 32-byte device nonce for this installation,
+  /// generating one lazily if not already created.
+  ///
+  /// IMPORTANT: The device nonce is held in volatile memory until saved.
+  /// Call [save] after generating a new device nonce before transmitting it to
+  /// peers or initiating a handoff.
+  Uint8List getDeviceNonce() {
+    _checkDisposed();
+    return using((Arena arena) {
+      final outNonce = arena<ffi.Uint8>(32);
+      final res = mesh_installation_device_nonce(_handle, outNonce);
+      _checkResult(res, 'Failed to get device nonce');
+      return Uint8List.fromList(outNonce.asTypedList(32));
+    });
+  }
+
+  /// Returns the current 32-byte device nonce if already generated,
+  /// or `null` if none has been generated yet.
+  Uint8List? getCurrentDeviceNonce() {
+    _checkDisposed();
+    return using((Arena arena) {
+      final outNonce = arena<ffi.Uint8>(32);
+      final outHasNonce = arena<ffi.Bool>();
+      final res = mesh_installation_current_device_nonce(
+        _handle,
+        outNonce,
+        outHasNonce,
+      );
+      _checkResult(res, 'Failed to get current device nonce');
+      if (!outHasNonce.value) {
+        return null;
+      }
+      return Uint8List.fromList(outNonce.asTypedList(32));
+    });
+  }
+
+  /// Query the voting state for an identity on this installation.
+  ///
+  /// If [identityKey] is omitted, queries the currently selected persona.
+  VotingState getVotingState({Uint8List? identityKey}) {
+    _checkDisposed();
+    if (identityKey != null && identityKey.length != 32) {
+      throw const InvalidArgumentsException(
+        'Identity key must be exactly 32 bytes',
+      );
+    }
+    return using((Arena arena) {
+      final ffi.Pointer<ffi.Uint8> keyPtr;
+      final int keyLen;
+      if (identityKey != null) {
+        keyPtr = arena<ffi.Uint8>(32);
+        keyPtr.asTypedList(32).setAll(0, identityKey);
+        keyLen = 32;
+      } else {
+        keyPtr = ffi.nullptr;
+        keyLen = 0;
+      }
+      final outState = arena<ffi.Int32>();
+      final res = mesh_installation_voting_state(
+        _handle,
+        keyPtr,
+        keyLen,
+        outState,
+      );
+      _checkResult(res, 'Failed to get voting state');
+      return _parseVotingState(outState.value);
+    });
+  }
+
+  /// Query the full voting record (counter, state, holder) for an identity.
+  ///
+  /// If [identityKey] is omitted, queries the currently selected persona.
+  VotingRecord getVotingRecord({Uint8List? identityKey}) {
+    _checkDisposed();
+    if (identityKey != null && identityKey.length != 32) {
+      throw const InvalidArgumentsException(
+        'Identity key must be exactly 32 bytes',
+      );
+    }
+    return using((Arena arena) {
+      final ffi.Pointer<ffi.Uint8> keyPtr;
+      final int keyLen;
+      if (identityKey != null) {
+        keyPtr = arena<ffi.Uint8>(32);
+        keyPtr.asTypedList(32).setAll(0, identityKey);
+        keyLen = 32;
+      } else {
+        keyPtr = ffi.nullptr;
+        keyLen = 0;
+      }
+      final outCounter = arena<ffi.Uint64>();
+      final outState = arena<ffi.Int32>();
+      final outHolder = arena<ffi.Uint8>(32);
+      final outHasHolder = arena<ffi.Bool>();
+
+      final res = mesh_installation_voting_record(
+        _handle,
+        keyPtr,
+        keyLen,
+        outCounter,
+        outState,
+        outHolder,
+        outHasHolder,
+      );
+      _checkResult(res, 'Failed to get voting record');
+
+      final holder =
+          outHasHolder.value
+              ? Uint8List.fromList(outHolder.asTypedList(32))
+              : null;
+      final rawCounter = outCounter.value;
+      final counter = BigInt.from(rawCounter).toUnsigned(64);
+
+      return VotingRecord(
+        counter: counter,
+        state: _parseVotingState(outState.value),
+        holder: holder,
+      );
+    });
+  }
+
+  /// Explicitly transitions every owned identity on this installation into the
+  /// [VotingState.gated] state and clears group permits.
+  void gateVoting() {
+    _checkDisposed();
+    final res = mesh_installation_gate_voting(_handle);
+    _checkResult(res, 'Failed to gate voting');
+  }
+
+  /// Begin a takeover claim for the selected identity while in the [VotingState.gated] state.
+  ///
+  /// Produces a signed [TakeoverStatement] with a sequence counter strictly greater than [floor]
+  /// and greater than any previously observed counter.
+  ///
+  /// [floor] can be an [int] or [BigInt] representing an unsigned 64-bit integer (0..2^64-1).
+  TakeoverStatement beginTakeover({Object floor = 0}) {
+    _checkDisposed();
+    final BigInt floorVal;
+    if (floor is int) {
+      floorVal = BigInt.from(floor);
+    } else if (floor is BigInt) {
+      floorVal = floor;
+    } else {
+      throw const InvalidArgumentsException(
+        'Floor counter must be an int or BigInt',
+      );
+    }
+
+    if (floorVal < BigInt.zero ||
+        floorVal > BigInt.parse('18446744073709551615')) {
+      throw const InvalidArgumentsException(
+        'Floor counter must be an unsigned 64-bit integer (0..2^64 - 1)',
+      );
+    }
+
+    return using((Arena arena) {
+      final outJson = arena<ffi.Pointer<ffi.Char>>();
+      final floorInt = floorVal.toSigned(64).toInt();
+      final res = mesh_installation_begin_takeover(_handle, floorInt, outJson);
+      _checkResult(res, 'Failed to begin takeover');
+
+      final jsonPtr = outJson.value;
+      try {
+        final jsonStr = jsonPtr.cast<Utf8>().toDartString();
+        final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+        return TakeoverStatement.fromJson(map);
+      } finally {
+        mesh_string_free(jsonPtr);
+      }
+    });
+  }
+
+  /// Begin a handoff transferring the selected identity's voting role to [recipientNonce].
+  ///
+  /// On success, this device permanently transitions to [VotingState.stopped] at this counter,
+  /// and produces a [HandoffResult] containing the signed [HandoffBundle] and the updated
+  /// [HandoffResult.snapshotBytes].
+  ///
+  /// If [onPersist] is supplied, it is invoked synchronously with the snapshot bytes BEFORE
+  /// this method returns. If [onPersist] throws an exception, the handoff bundle is not returned.
+  ///
+  /// CRITICAL: To prevent double-voting across crashes, [snapshotBytes] must be written to
+  /// durable storage before the bundle is transmitted or displayed.
+  HandoffResult beginHandoff(
+    Uint8List recipientNonce, {
+    DateTime? at,
+    void Function(Uint8List snapshotBytes)? onPersist,
+  }) {
+    _checkDisposed();
+    if (recipientNonce.length != 32) {
+      throw const InvalidArgumentsException(
+        'Recipient nonce must be exactly 32 bytes',
+      );
+    }
+    final nowMs = (at ?? DateTime.now()).millisecondsSinceEpoch;
+    if (nowMs < 0) {
+      throw const InvalidArgumentsException('Timestamp must not be pre-1970');
+    }
+
+    return using((Arena arena) {
+      final recipientPtr = arena<ffi.Uint8>(32);
+      recipientPtr.asTypedList(32).setAll(0, recipientNonce);
+      final outBundlePtr = arena<ffi.Pointer<ffi.Uint8>>();
+      final outBundleLen = arena<ffi.Size>();
+      final outSnapshotPtr = arena<ffi.Pointer<ffi.Uint8>>();
+      final outSnapshotLen = arena<ffi.Size>();
+
+      final res = mesh_installation_begin_handoff(
+        _handle,
+        recipientPtr,
+        32,
+        nowMs,
+        outBundlePtr,
+        outBundleLen,
+        outSnapshotPtr,
+        outSnapshotLen,
+      );
+      _checkResult(res, 'Failed to begin handoff');
+
+      final bundlePtr = outBundlePtr.value;
+      final bundleLen = outBundleLen.value;
+      final snapshotPtr = outSnapshotPtr.value;
+      final snapshotLen = outSnapshotLen.value;
+
+      try {
+        final bundleBytes = Uint8List.fromList(
+          bundlePtr.asTypedList(bundleLen),
+        );
+        final snapshotBytes = Uint8List.fromList(
+          snapshotPtr.asTypedList(snapshotLen),
+        );
+
+        if (onPersist != null) {
+          onPersist(snapshotBytes);
+        }
+
+        return HandoffResult(
+          bundle: HandoffBundle.fromBytes(bundleBytes),
+          snapshotBytes: snapshotBytes,
+        );
+      } finally {
+        mesh_buffer_free(bundlePtr, bundleLen);
+        mesh_buffer_free(snapshotPtr, snapshotLen);
+      }
+    });
+  }
+
+  /// Accept an authenticated [HandoffBundle] addressed to this device's nonce.
+  ///
+  /// Transitions this installation to [VotingState.voting] (or [VotingState.gated] if conflict),
+  /// and returns an [AcceptHandoffResult] containing the new state and the updated post-handoff
+  /// snapshot bytes.
+  ///
+  /// If [onPersist] is supplied, it is invoked synchronously with the snapshot bytes BEFORE
+  /// this method returns.
+  AcceptHandoffResult acceptHandoff(
+    HandoffBundle bundle, {
+    DateTime? at,
+    void Function(Uint8List snapshotBytes)? onPersist,
+  }) {
+    _checkDisposed();
+    if (bundle.rawBytes.isEmpty ||
+        bundle.rawBytes.length > HandoffBundle.maxBundleBytes) {
+      throw const InvalidArgumentsException('Invalid handoff bundle size');
+    }
+    final nowMs = (at ?? DateTime.now()).millisecondsSinceEpoch;
+    if (nowMs < 0) {
+      throw const InvalidArgumentsException('Timestamp must not be pre-1970');
+    }
+
+    return using((Arena arena) {
+      final bundlePtr = arena<ffi.Uint8>(bundle.rawBytes.length);
+      bundlePtr.asTypedList(bundle.rawBytes.length).setAll(0, bundle.rawBytes);
+      final outNewState = arena<ffi.Int32>();
+      final outSnapshotPtr = arena<ffi.Pointer<ffi.Uint8>>();
+      final outSnapshotLen = arena<ffi.Size>();
+
+      final res = mesh_installation_accept_handoff(
+        _handle,
+        bundlePtr,
+        bundle.rawBytes.length,
+        nowMs,
+        outNewState,
+        outSnapshotPtr,
+        outSnapshotLen,
+      );
+      _checkResult(res, 'Failed to accept handoff');
+
+      final snapshotPtr = outSnapshotPtr.value;
+      final snapshotLen = outSnapshotLen.value;
+      try {
+        final snapshotBytes = Uint8List.fromList(
+          snapshotPtr.asTypedList(snapshotLen),
+        );
+        if (onPersist != null) {
+          onPersist(snapshotBytes);
+        }
+        return AcceptHandoffResult(
+          state: _parseVotingState(outNewState.value),
+          snapshotBytes: snapshotBytes,
+        );
+      } finally {
+        mesh_buffer_free(snapshotPtr, snapshotLen);
+      }
+    });
+  }
+}
+
+VotingState _parseVotingState(int code) {
+  switch (code) {
+    case 0:
+      return VotingState.voting;
+    case 1:
+      return VotingState.stopped;
+    case 2:
+      return VotingState.gated;
+    default:
+      throw GenericMeshIdentityException('Unknown voting state code: $code');
+  }
 }

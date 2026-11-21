@@ -1,3 +1,17 @@
+## 0.3.0
+
+- Added device-to-device handoff and voting role migration protocol (Slice 3).
+- Device nonce management: lazy generation and retrieval (`getDeviceNonce`, `getCurrentDeviceNonce`) with persistent snapshot tracking.
+- Monotonic voting roles: `VotingState` enum (`voting`, `stopped`, `gated`) and `VotingRecord` (lossless `BigInt` counter, state, holder).
+- Gating and takeover claims: `gateVoting()` (gating all owned identities on the installation) and `beginTakeover(floor)` generating signed `TakeoverStatement` instances with lossless unsigned 64-bit `BigInt` counters.
+- Transactional durable handoff: `beginHandoff(recipientNonce)` and `acceptHandoff(bundle)` returning post-transition snapshot bytes (`HandoffResult` and `AcceptHandoffResult`) with optional synchronous `onPersist` callbacks, preventing double-voting equivocation across node restarts.
+- Unauthenticated envelope inspection: `HandoffBundle.fromBytes` decodes the CBOR envelope without authenticating signatures (signatures verified upon `acceptHandoff`).
+- Pre-allocation defensive checks: `maxBundleBytes` (5 MiB ceiling), recipient nonces (32 bytes), identity keys (32 bytes), and non-negative floor counters validated in Dart before native FFI memory allocation.
+- Invariant enforcement: stopped devices cannot sign or begin handoffs (`NotVotingDeviceException`), wrong recipient nonce rejection (`WrongHandoffRecipientException`), stale counter rejection (`StaleHandoffException`), un-gated takeover rejection (`NotGatedException`).
+- Strict panic poisoning: every C-ABI function poisons the handle on caught native panic, including read-only queries.
+- Added typed exceptions: `NotVotingDeviceException`, `InvalidHandoffException`, `StaleHandoffException`, `WrongHandoffRecipientException`, `CounterExhaustedException`, `NotGatedException`, and `HandoffWriteFailedException`.
+- Added package developer guidelines in `AGENTS.md`.
+
 ## 0.2.0
 
 - Added cryptographic in-person Encounter ceremony protocol support (Slice 2).

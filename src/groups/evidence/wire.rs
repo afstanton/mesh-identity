@@ -1,4 +1,4 @@
-//! Versioned certificate envelope (W4c-1 in `docs/architecture/proof-carrying-w4c-plan.md`).
+//! Versioned certificate envelope.
 //!
 //! Codec only: nothing here verifies a proof or a digest, and nothing in the agreement path
 //! calls it yet. `RosterCertificate::to_bytes` and `from_bytes` are unchanged; the envelope

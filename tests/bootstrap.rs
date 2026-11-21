@@ -1,4 +1,4 @@
-#![cfg(feature = "groups")]
+#![cfg(all(feature = "groups", feature = "test-support"))]
 #[path = "support/roster.rs"]
 mod roster;
 #[allow(dead_code)]

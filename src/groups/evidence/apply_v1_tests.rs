@@ -1,5 +1,5 @@
 //! W4c-2b: applying version-1 certificates at the certified transitions, with real keys and
-//! signatures (`docs/architecture/proof-carrying-w4c2-plan.md`). Rotation and departure are
+//! signatures. Rotation and departure are
 //! driven from raw signing keys here; ejection and admission go through the public API in
 //! `tests/proof_carrying_certificates.rs`.
 

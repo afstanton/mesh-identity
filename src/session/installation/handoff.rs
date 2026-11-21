@@ -639,6 +639,14 @@ impl Installation {
             .unwrap_or_else(|error| error.into_inner())
             .clone();
         let checkpoints = export_checkpoints(&table, identity);
+        if checkpoints.len() > MAX_CHECKPOINTS_PER_BUNDLE {
+            return Err(Error::InvalidHandoff);
+        }
+        for cp in &checkpoints {
+            if cp.bytes.len() > MAX_CHECKPOINT_BYTES {
+                return Err(Error::InvalidHandoff);
+            }
+        }
         let statement_signature = key
             .sign(&statement_message(identity, counter, recipient))
             .to_bytes()
@@ -661,6 +669,9 @@ impl Installation {
             envelope_signature,
             checkpoints,
         };
+        if bundle.to_bytes().len() > MAX_HANDOFF_BUNDLE_BYTES {
+            return Err(Error::InvalidHandoff);
+        }
         let stopped = VotingRecord {
             counter,
             state: VotingState::Stopped,

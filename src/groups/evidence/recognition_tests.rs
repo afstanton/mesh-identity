@@ -1,4 +1,4 @@
-//! H3: certified recognition of a replacement device (`TakeoverRecognition.tla`).
+//! Certified recognition of a replacement device.
 
 use super::apply_v1_tests::{cert, snapshot, v1};
 use super::certificate_v1_tests::{digest_of, group, key, proof_at_head, signing};

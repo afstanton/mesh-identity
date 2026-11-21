@@ -65,6 +65,14 @@ impl InitiatorMachine {
         matches!(self.phase, IPhase::Confirmed(_) | IPhase::Aborted)
     }
 
+    pub fn peer_identity_pk(&self) -> Option<[u8; 32]> {
+        match &self.phase {
+            IPhase::RevealShown { awaiting, .. } => Some(awaiting.peer_ed25519_pk()),
+            IPhase::Confirmed(c) => Some(c.peer_ed25519_pk()),
+            _ => None,
+        }
+    }
+
     /// Show QR1. Only valid from `Idle`.
     pub fn start<R: CryptoRng + RngCore>(
         &mut self,
@@ -233,6 +241,14 @@ impl ResponderMachine {
 
     pub fn is_terminal(&self) -> bool {
         matches!(self.phase, RPhase::Confirmed(_) | RPhase::Aborted)
+    }
+
+    pub fn peer_identity_pk(&self) -> Option<[u8; 32]> {
+        match &self.phase {
+            RPhase::AwaitingComparison { awaiting, .. } => Some(awaiting.peer_ed25519_pk()),
+            RPhase::Confirmed(c) => Some(c.peer_ed25519_pk()),
+            _ => None,
+        }
     }
 
     /// Accept QR1 and return QR2. An identical rescan returns the same QR2 with no new nonce.

@@ -1,4 +1,4 @@
-//! AS-1: arithmetic for agreed suspension (`docs/architecture/step2-agreed-suspension-plan.md`).
+//! Arithmetic for agreed suspension.
 //! No production code. A reported key loses its vote; the question is whether it also leaves
 //! the denominator. Bounded enumeration through the real electorate helper, not a proof for
 //! every roster chain; the per-parent fault bound stays an assumption.

@@ -1,4 +1,4 @@
-#![cfg(feature = "groups")]
+#![cfg(all(feature = "groups", feature = "test-support"))]
 //! One distributor and one fresh key per agreed roster in this experiment.
 #[path = "support/roster.rs"]
 mod roster;

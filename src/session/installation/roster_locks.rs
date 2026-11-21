@@ -95,6 +95,8 @@ impl RosterLocks {
     }
 }
 
+pub const MAX_ROSTER_LOCKS: usize = 8192;
+
 pub(super) fn record_vote(
     table: &mut RosterLockTable,
     parent: Parent,
@@ -107,6 +109,9 @@ pub(super) fn record_vote(
         return Err(Error::InvalidRosterPhase);
     }
     if round == 0 {
+        return Err(Error::ConflictingRosterVote);
+    }
+    if table.len() >= MAX_ROSTER_LOCKS && !table.contains_key(&parent) {
         return Err(Error::ConflictingRosterVote);
     }
     let RosterParentLocks::Active(identities) = table.entry(parent).or_default() else {

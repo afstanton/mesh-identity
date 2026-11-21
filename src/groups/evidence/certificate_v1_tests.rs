@@ -1,5 +1,5 @@
 //! W4c-2a: verification of version-1 certificates with real keys and real signatures
-//! (`docs/architecture/proof-carrying-w4c2-plan.md`). Verification only; nothing is applied.
+//! Version 1 certificate verification tests. Verification only; nothing is applied.
 
 use super::proof::{CarriedProof, EquivocationProof};
 use super::wire::{CertificateV1, VersionedCertificate, chain_digest};

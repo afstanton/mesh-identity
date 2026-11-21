@@ -1,4 +1,4 @@
-//! F3b: what a member does with an admission it has seen (`step4-f0-handle-contract.md`).
+//! Handling admissions and roster votes.
 //!
 //! A member that holds the invitation and the candidate's consent signs a roster prepare vote
 //! for the admission child, sends it to the other members, and signs a commit vote once it has
@@ -45,6 +45,9 @@ impl Round {
     fn add(&mut self, commit: bool, vote: VoteRec) -> bool {
         let votes = self.votes(commit);
         if votes.iter().any(|v| v.signer == vote.signer) {
+            return false;
+        }
+        if votes.len() >= MAX_CERTIFICATE_SIGNERS {
             return false;
         }
         votes.push(vote);

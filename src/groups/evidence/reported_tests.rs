@@ -1,4 +1,4 @@
-//! AS-2: reported keys on the chain (`docs/architecture/step2-agreed-suspension-plan.md`). A
+//! Reported keys on the chain. A
 //! reported key cannot vote but stays in the denominator. Nothing authorizes a report yet
 //! (AS-3), so these tests record one directly.
 

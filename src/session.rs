@@ -386,6 +386,14 @@ impl EncounterController {
         })
     }
 
+    pub fn peer_identity_pk(&self) -> Option<[u8; 32]> {
+        match &self.live {
+            Some(LiveEncounter::Initiator(m)) => m.peer_identity_pk(),
+            Some(LiveEncounter::Responder(m)) => m.peer_identity_pk(),
+            None => None,
+        }
+    }
+
     pub fn confirm_and_save(
         &mut self,
         comparison: Comparison,

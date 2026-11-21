@@ -37,19 +37,19 @@ mesh-identity
 ```
 
 ### Tier 1: Core (Always Enabled)
-Covers individual identity and pairwise in-person encounters only. **Zero knowledge of groups, rosters, quorums, or voting.**
+Covers individual identity and pairwise in-person encounters:
 * **Identities & Personas:** Generating and managing local Ed25519/X25519 keys.
 * **Encounter Protocol:** Offline in-person introduction via QR code, BLE chunking, state machines, Short Authentication Strings (SAS), and transcript hashing.
 * **Contacts:** Address book, attempt policies, and recording whether a contact was verified in person.
 * **Link Ceremony:** Peer-to-peer link disclosure between two local personas belonging to the same individual.
-* **Installation & Snapshot:** Multi-identity management, device nonces, and snapshot/restore of individual state.
+* **Installation & Snapshot:** Multi-identity management, device nonces, durable snapshot/restore, voter anti-equivocation lock tables (`roster_locks.rs`), and device handoff state (`handoff.rs`).
 
 ### Tier 2: `groups` Feature (Optional)
-Covers group admission governance, PBFT-style Byzantine roster agreement, and evidence:
+Covers Byzantine group admission governance, PBFT-style Byzantine roster agreement, and evidence:
 * **Roster Agreement:** Genesis, membership transitions, threshold policies, prepare/commit rounds.
 * **Quorum & Evidence:** Quorum certificate headers (up to 128 signers, 192 members), equivocation proofs (up to 64), assembly, and verification.
 * **Lifecycle:** Invitations, candidate vouchers, departures, suspensions, and ejections.
-* **Signing & Locks:** The 14 group message builders, group signing methods, and `roster_locks.rs` (local voter lock table preventing equivocation, with `retire_roster_parent` enabled for standard builds).
+* **Handle Facade:** `GroupHandle`, local network distribution, staging, and group merge coordination.
 * **Dependency:** Depends *only* on Core.
 
 ### Tier 3: `openpgp` Feature (Optional, Default Off)
@@ -67,11 +67,12 @@ Covers group admission governance, PBFT-style Byzantine roster agreement, and ev
 These bounds protect the crate from denial-of-service, memory exhaustion, and snapshot restore failure:
 
 1. **Snapshot Budget (Guarantees the 64 MiB Restore Invariant):**
-   - Identities per installation: Configurable budget (default 16, ceiling 256).
-   - Contacts per installation: 100,000 maximum (~20 MB).
+   - Identities per installation: Configurable budget (default 16, ceiling 2,048).
+   - Contacts per installation: 100,000 maximum aggregate across all identities (~20 MB).
    - Alias & label strings: 64 bytes UTF-8 maximum (reject on exceed, never truncate).
-   - `seen_transcripts`: 262,144 entries maximum (~8 MB, evicts oldest on insert).
-   - Worst-case total: ~44 MiB, ensuring any valid saved snapshot reliably restores within `MAX_SNAPSHOT_BYTES` (64 MiB).
+   - `seen_transcripts`: 262,144 entries maximum aggregate across all stores (~8 MB, evicts oldest on insert).
+   - Roster lock table: 8,192 maximum parent entries (~0.8 MB).
+   - Worst-case total: ~30 MiB, ensuring any valid saved snapshot reliably restores well within `MAX_SNAPSHOT_BYTES` (64 MiB).
 
 2. **Handoff Bundle Bounds (Guards Against Untrusted Allocation):**
    - Total bundle cap: 5 MiB.
@@ -92,8 +93,8 @@ These bounds protect the crate from denial-of-service, memory exhaustion, and sn
 ## 4. Testing & Parity Verification
 
 All test suites must maintain strict parity:
-* **Core Baseline:** ~96 tests default, 117 tests with all features.
-* **Groups Baseline:** ~407 tests default, 409 tests with all features.
+* **Core Baseline:** 105 tests default.
+* **Groups Baseline:** 512 tests with all features (512 passed, 1 ignored long-running sweep).
 * Tests and known-answer vectors must be ported alongside the code and run with:
   ```bash
   cargo test

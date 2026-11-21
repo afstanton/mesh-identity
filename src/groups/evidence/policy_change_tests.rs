@@ -1,4 +1,4 @@
-//! S2a: certified policy change (`docs/architecture/step2-certified-policy-and-enrollment-plan.md`).
+//! Certified policy change.
 
 use super::apply_v1_tests::{cert, snapshot, v1};
 use super::certificate_v1_tests::{digest_of, group, key, proof_at_head};

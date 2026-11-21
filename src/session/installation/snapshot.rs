@@ -176,12 +176,26 @@ impl InstallationSnapshot {
             return Err(SnapshotError::Invalid);
         }
         let mut contacts = BTreeMap::new();
+        let mut total_contacts = 0usize;
+        let mut total_seen_transcripts = 0usize;
         for store in wire.stores {
             let identity = store.local_identity;
+            total_contacts = total_contacts.saturating_add(store.contacts.len());
+            total_seen_transcripts =
+                total_seen_transcripts.saturating_add(store.seen_transcripts.len());
             let store = ContactStore::from_wire(store).map_err(|_| SnapshotError::Invalid)?;
             if contacts.insert(identity, store).is_some() {
                 return Err(SnapshotError::Invalid);
             }
+        }
+        if total_contacts > crate::session::installation::MAX_INSTALLATION_CONTACTS {
+            return Err(SnapshotError::Invalid);
+        }
+        if total_seen_transcripts > crate::contact::MAX_SEEN_TRANSCRIPTS {
+            return Err(SnapshotError::Invalid);
+        }
+        if wire.roster_locks.len() > crate::session::installation::roster_locks::MAX_ROSTER_LOCKS {
+            return Err(SnapshotError::Invalid);
         }
         if !contacts.contains_key(&wire.selected) {
             return Err(SnapshotError::Invalid);

@@ -1,5 +1,5 @@
-//! S2b: certified recovery enrollment. Only the commitment is replicated; the witnesses and
-//! salt stay with the owner and the witnesses (`step2-certified-policy-and-enrollment-plan.md`).
+//! Certified recovery enrollment. Only the commitment is replicated; the witnesses and
+//! salt stay with the owner and the witnesses.
 
 use super::apply_v1_tests::{cert, snapshot, v1};
 use super::certificate_v1_tests::{digest_of, group, key, proof_at_head, signing};

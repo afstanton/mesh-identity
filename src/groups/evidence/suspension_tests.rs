@@ -1,4 +1,4 @@
-//! AS-3: certified agreed suspension (`docs/architecture/step2-agreed-suspension-plan.md`).
+//! Certified agreed suspension.
 
 use super::apply_v1_tests::{cert, departure, rotation, snapshot, v1};
 use super::certificate_v1_tests::{digest_of, group, key, proof_at_head, signing};

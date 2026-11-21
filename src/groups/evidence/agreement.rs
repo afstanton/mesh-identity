@@ -909,7 +909,7 @@ impl VouchedGroup {
     /// quorum for the electorate. Today a certificate carries no proofs, so the proof subjects
     /// it carries are exactly the parent's suspect keys (inherited and carried coincide); this
     /// keeps the behaviour of the previous arithmetic. See
-    /// `docs/architecture/proof-carrying-wiring-plan.md` (slice W1).
+    /// Roster certificate validation and state transitions.
     fn check_vote_quorum(&self, signers: &[Key]) -> Result<(), Error> {
         let mut distinct = BTreeSet::new();
         for signer in signers {

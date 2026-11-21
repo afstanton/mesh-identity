@@ -143,14 +143,14 @@ struct RosterHistory {
     #[allow(dead_code)] // read by tests; the certified suspension operation writes it (AS-3)
     new_reports: Vec<Key>,
     /// Every key reported on this node and its ancestors. A reported key loses its vote but
-    /// stays in the denominator (`step2-agreed-suspension-plan.md`). Shared like `inherited`.
+    /// stays in the denominator. Shared like `inherited`.
     reported: Arc<BTreeSet<Key>>,
     /// Recognitions made by the transition that created this node: identity, counter, device
     /// nonce. Empty for ordinary nodes.
     #[allow(dead_code)] // read by tests
     new_recognitions: Vec<Recognition>,
     /// The latest recognized (counter, nonce) per identity on this node and its ancestors: which
-    /// device may sign for the identity (`step3-voting-device-handoff-plan.md`, H3).
+    /// device may sign for the identity.
     recognized: Arc<BTreeMap<Key, (u64, [u8; 32])>>,
 }
 

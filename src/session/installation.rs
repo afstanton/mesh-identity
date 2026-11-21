@@ -191,8 +191,9 @@ pub fn group_roster_freshness_message(
     message
 }
 
-pub const DEFAULT_MAX_IDENTITIES: usize = 2048;
-pub const MAX_IDENTITIES_CEILING: usize = 4096;
+pub const DEFAULT_MAX_IDENTITIES: usize = 16;
+pub const MAX_IDENTITIES_CEILING: usize = 2048;
+pub const MAX_INSTALLATION_CONTACTS: usize = 100_000;
 
 pub type Identity = [u8; 32];
 
@@ -543,6 +544,15 @@ impl Installation {
         self.max_identities
     }
 
+    pub fn total_contacts(&self) -> usize {
+        self.current.contacts.count()
+            + self
+                .inactive
+                .values()
+                .map(|p| p.contacts.count())
+                .sum::<usize>()
+    }
+
     pub fn set_max_identities(&mut self, limit: usize) -> Result<(), Error> {
         let current_count = self.inactive.len() + 1;
         if limit > MAX_IDENTITIES_CEILING || limit < current_count {
@@ -596,6 +606,11 @@ impl Installation {
     ) -> Result<&ContactRecordV1, Error> {
         if self.contacts(public).is_some() {
             return Err(SessionError::Store(StoreError::SelfContact).into());
+        }
+        if self.total_contacts() >= MAX_INSTALLATION_CONTACTS
+            && self.contacts(local).and_then(|c| c.get(&public)).is_none()
+        {
+            return Err(SessionError::Store(StoreError::StoreFull).into());
         }
         let export = ContactExportV1 {
             peer_ed25519_pk: public,
@@ -694,6 +709,14 @@ impl Installation {
             .ok_or(Error::UnknownIdentity)?
             .export_contact(&peer, None)
             .ok_or(SessionError::Store(StoreError::UnknownContact))?;
+        if self.total_contacts() >= MAX_INSTALLATION_CONTACTS
+            && self
+                .contacts(destination)
+                .and_then(|c| c.get(&peer))
+                .is_none()
+        {
+            return Err(SessionError::Store(StoreError::StoreFull).into());
+        }
         Ok(self
             .contact_store_mut(destination)?
             .import_contact(exported, rng)
@@ -845,6 +868,13 @@ impl Installation {
         rng: &mut (impl CryptoRng + RngCore),
     ) -> Result<ContactRecordV1, Error> {
         self.check(ceremony)?;
+        if self.total_contacts() >= MAX_INSTALLATION_CONTACTS {
+            if let Some(peer_pk) = self.current.peer_identity_pk() {
+                if self.current.contacts.get(&peer_pk).is_none() {
+                    return Err(SessionError::Store(StoreError::StoreFull).into());
+                }
+            }
+        }
         let result = self
             .current
             .confirm_and_save(comparison, peer_code, now, timestamp, rng);

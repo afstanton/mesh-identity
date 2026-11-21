@@ -21,7 +21,7 @@ mesh-identity
 ### Feature Flags
 
 * `default = []`: Builds the Core identity library with zero external group or OpenPGP dependencies (active in Milestone X2).
-* `groups`: Enables group admission, PBFT-style roster consensus, quorum certificates, handle state machines, and voter locks (scheduled for Milestone X3).
+* `groups`: Enables group admission, PBFT-style roster consensus, quorum certificates, handle state machines, and evidence (Milestone X3).
 * `openpgp`: Enables OpenPGP interoperability powered by `rpgp` (pure Rust, MIT/Apache-2.0, zero C/OpenSSL dependencies, scheduled for Milestone X4).
 * `test-support`: Enables test-only simulation fixtures and reduced SAS campaign moduli. Never enabled in production.
 

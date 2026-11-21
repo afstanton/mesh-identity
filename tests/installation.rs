@@ -651,3 +651,19 @@ fn test_handoff_bundle_bounds_rejection() {
         Some(Error::InvalidHandoff)
     );
 }
+
+#[test]
+fn test_default_identity_limit_enforced() {
+    let mut i = Installation::new(SigningKey::from_bytes(&[1u8; 32]));
+    for b in 2..=16u8 {
+        i.add_identity(SigningKey::from_bytes(&[b; 32])).unwrap();
+    }
+    // 17th identity exceeds default budget of 16
+    assert_eq!(
+        i.add_identity(SigningKey::from_bytes(&[17u8; 32])).err(),
+        Some(Error::IdentityLimitExceeded)
+    );
+    // Setting limit allows adding more up to ceiling
+    i.set_max_identities(32).unwrap();
+    assert!(i.add_identity(SigningKey::from_bytes(&[17u8; 32])).is_ok());
+}

@@ -792,3 +792,22 @@ fn removing_an_identity_cleans_uncertainty_and_permits_handoff_recovery() {
     let mut restored = res.unwrap();
     assert_eq!(vote(&mut restored, 1, P1, C1), Ok(()));
 }
+
+#[test]
+fn oversized_checkpoints_abort_handoff_before_persisting_or_stopping() {
+    let mut source = Installation::new(key(9));
+    let id = source.selected();
+    let nonce = [42u8; 32];
+    {
+        let mut table = source.roster_locks.lock().unwrap();
+        // Insert more than MAX_CHECKPOINTS_PER_BUNDLE checkpoints
+        for i in 0..=(MAX_CHECKPOINTS_PER_BUNDLE as u64) {
+            let mut parent = [0u8; 32];
+            parent[..8].copy_from_slice(&i.to_be_bytes());
+            let _ = roster_locks::record_vote(&mut table, (i, parent), id, [1u8; 32], 1, 1);
+        }
+    }
+    let res = source.begin_handoff(nonce, |_, _| Ok(()));
+    assert_eq!(res.err(), Some(Error::InvalidHandoff));
+    assert_eq!(source.voting_record(id).state, VotingState::Voting);
+}

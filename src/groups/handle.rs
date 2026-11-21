@@ -1,4 +1,4 @@
-//! The `GroupHandle` skeleton (`step4-f0-handle-contract.md`, slice F2).
+//! The `GroupHandle` management facade.
 //!
 //! The handle owns one `Installation` and the groups it takes part in. Every call that changes
 //! state stages outgoing bytes and events. Nothing leaves until the host has written the blob

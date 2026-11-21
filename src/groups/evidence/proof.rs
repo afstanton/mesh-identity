@@ -1,5 +1,4 @@
-//! Self-verifying equivocation proofs (decision C, W4a in
-//! `docs/architecture/proof-carrying-w4-plan.md`).
+//! Self-verifying equivocation proofs.
 //!
 //! A proof is two signatures by one key over two different children for the same group,
 //! parent, round and phase. Nothing else is needed to check it, so it applies without a vote.

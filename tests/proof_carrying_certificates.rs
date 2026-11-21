@@ -1,4 +1,4 @@
-#![cfg(feature = "groups")]
+#![cfg(all(feature = "groups", feature = "test-support"))]
 //! Proof-carrying certificates through the public API (W4c-2b): version-1 certificates are
 //! accepted by the certified admission and ejection methods, record their proofs on the chain,
 //! and survive the versioned wire envelope.

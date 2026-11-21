@@ -186,6 +186,7 @@ fn resend_completed_admission_must_recover_a_lost_join_snapshot() {
 #[test]
 fn saving_many_identities_must_not_produce_unreadable_snapshot() {
     let mut i = Installation::new(sk(1));
+    i.set_max_identities(1025).unwrap();
     for index in 0..1024u32 {
         let mut seed = [0u8; 32];
         seed[..4].copy_from_slice(&index.to_be_bytes());

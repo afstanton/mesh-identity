@@ -1,4 +1,4 @@
-//! The saved form of a group (`step4-f0-handle-contract.md`, slice F1).
+//! The saved form of a group.
 //!
 //! One versioned CBOR document holds the group, the whole roster chain from its root to its
 //! head (`catch_up` walks ancestors, so the chain length must equal the revision), and every

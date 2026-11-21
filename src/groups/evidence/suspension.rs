@@ -1,5 +1,5 @@
 //! Agreed suspension: a certified transition that stops a key voting without removing it or
-//! shrinking the count (`docs/architecture/step2-agreed-suspension-plan.md`). A report proves
+//! shrinking the count. A report proves
 //! nothing, so the key stays in the denominator (AS-1), and a guard stops the group from
 //! suspending itself into a stall.
 

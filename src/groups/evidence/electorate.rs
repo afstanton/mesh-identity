@@ -1,5 +1,4 @@
-//! Electorate and quorum arithmetic for proof-carrying certificates (decision C in
-//! `docs/architecture/group-and-facade-design-intent.md`).
+//! Electorate and quorum arithmetic for proof-carrying certificates.
 //!
 //! One pure function answers one question: given the parent roster, the proof subjects a
 //! certificate carries, the proof subjects inherited from its authenticated parent chain, and
@@ -20,8 +19,7 @@
 //! Approval policies (inviter-only, ejection targets, contact levels, presence) never edit the
 //! roster passed here, and a satisfied threshold does not authorize a transition.
 //!
-//! Used by `VouchedGroup::check_vote_quorum` (wiring slice W1,
-//! `docs/architecture/proof-carrying-wiring-plan.md`).
+//! Used by `VouchedGroup::check_vote_quorum`.
 
 use std::collections::BTreeSet;
 

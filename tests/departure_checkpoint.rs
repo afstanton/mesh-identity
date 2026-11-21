@@ -1,4 +1,4 @@
-#![cfg(feature = "groups")]
+#![cfg(all(feature = "groups", feature = "test-support"))]
 use mesh_identity::groups::evidence::SimulatedAuthority as _;
 #[allow(dead_code)]
 mod support;

@@ -1,4 +1,4 @@
-#![cfg(feature = "groups")]
+#![cfg(all(feature = "groups", feature = "test-support"))]
 //! Safety experiment for finalizing one child of a fixed parent roster.
 //! The fixture assumes authenticated votes and durable honest voter locks.
 

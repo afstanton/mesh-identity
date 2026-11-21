@@ -1,8 +1,8 @@
-//! Collector assembly (W4d-1 in `docs/architecture/proof-carrying-w4d-plan.md`).
+//! Collector assembly.
 //!
 //! `plan_assembly` is pure: it chooses which of the held new proofs to attach. Attaching every
 //! proof is not always best, because a proof for a member that voted removes that member's
-//! vote from the count (`CollectorAssembly.tla`). The choice collapses to counts per voting
+//! vote from the count. The choice collapses to counts per voting
 //! class: keys are interchangeable within a class (voted in neither phase, prepare only, commit
 //! only, or both), so only a count per class is searched, and the smallest certificate wins. The differential test checks this against exhaustive
 //! subset enumeration.

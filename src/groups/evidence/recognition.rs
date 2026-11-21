@@ -1,6 +1,5 @@
 //! Recognizing a replacement device: a certified roster operation that records which device
-//! may sign for an identity in this group (`docs/architecture/step3-voting-device-handoff-plan.md`,
-//! H3; `TakeoverRecognition.tla`).
+//! may sign for an identity in this group.
 //!
 //! A takeover without the old device starts gated everywhere. The new device signs a statement
 //! `(identity, counter, device nonce)`; each group certifies it as a roster child, and the chain

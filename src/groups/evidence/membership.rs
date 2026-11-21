@@ -308,7 +308,7 @@ impl VouchedGroup {
         Ok(false)
     }
 
-    /// Any current, eligible peer can propose removal. The experiment
+    /// Any current, eligible peer can propose removal. Removal
     /// requires a strict majority of the current roster excluding the target.
     pub(crate) fn propose_removal(
         &self,

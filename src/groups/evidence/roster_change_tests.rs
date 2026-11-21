@@ -1,5 +1,4 @@
-//! W4e: focused checks for admission, removal, readmission and proof scope
-//! (`docs/architecture/proof-carrying-w4e-plan.md`). Bounded enumerations over the real code
+//! Checks for admission, removal, readmission and proof scope. Bounded enumerations over the real code
 //! and the real helper; not a proof for every roster chain, and the per-parent fault bound stays
 //! an assumption.
 

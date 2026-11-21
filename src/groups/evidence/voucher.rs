@@ -482,7 +482,7 @@ impl VouchedGroup {
             && self.membership(voucher.candidate).is_some()
     }
 
-    /// Apply an authenticated withdrawal in the experiment's agreed order.
+    /// Apply an authenticated withdrawal in the agreed order.
     pub(crate) fn withdraw(&mut self, issuer: Key, voucher: &DirectVoucher) -> Result<(), Error> {
         if !self.is_key_or_successor(issuer, voucher.issuer) || voucher.group != self.group.id {
             return Err(Error::Ineligible);

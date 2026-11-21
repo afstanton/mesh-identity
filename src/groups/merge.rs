@@ -4,7 +4,7 @@
 //! authorizes nothing: the final roster is whoever signs the exact proposal (G2), and no source
 //! group is read, changed or reached from here. The function takes explicit views and terms, reads
 //! no clock, installation, randomness or storage, and gives the same bytes for the same inputs in
-//! any order. See `docs/architecture/step5-g0-merge-contract.md`.
+//! any order.
 
 use crate::groups::Policy;
 use ed25519_dalek::VerifyingKey;

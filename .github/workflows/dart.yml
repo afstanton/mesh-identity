@@ -34,11 +34,21 @@ jobs:
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@1.100.0
+        with:
+          components: clippy, rustfmt
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: bindings/dart/mesh_identity/native
+
+      - name: Verify native Rust formatting
+        working-directory: bindings/dart/mesh_identity/native
+        run: cargo fmt --check
+
+      - name: Clippy native Rust crate
+        working-directory: bindings/dart/mesh_identity/native
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Install Dart dependencies
         working-directory: bindings/dart/mesh_identity

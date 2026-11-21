@@ -1,6 +1,8 @@
 name: mesh_identity
-description: Peer identity, offline encounters, and Byzantine group admission governance for Dart and Flutter.
-version: 0.1.0
+description: >-
+  Pure Dart bindings for mesh-identity: cryptographic peer identity lifecycle,
+  contact management, durable snapshot persistence, and offline Encounter ceremonies.
+version: 0.2.0
 repository: https://github.com/afstanton/mesh-identity
 
 environment:

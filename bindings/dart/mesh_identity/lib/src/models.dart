@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:typed_data';
 
 /// The verification status of a contact record.
@@ -168,5 +169,86 @@ class Contact {
     final pkPrefix =
         peerPublicKey.length >= 4 ? peerPublicKey.sublist(0, 4) : peerPublicKey;
     return 'Contact(pk: $pkPrefix..., alias: $alias, status: $status, ver: $verificationStatus)';
+  }
+}
+
+/// The Short Authentication String (SAS) comparison result for mutual human confirmation.
+class EncounterComparison {
+  /// Creates an [EncounterComparison] with the derived numeric code.
+  const EncounterComparison(this.code);
+
+  /// The 6-digit numeric comparison code (0..999999).
+  final int code;
+
+  /// The zero-padded 6-digit string representation.
+  String get formattedCode => code.toString().padLeft(6, '0');
+
+  /// Required user-visible instruction to mitigate human glance-and-confirm complacency.
+  static const String instruction =
+      'Compare the 6-digit code with your peer. Check every digit carefully. Do not confirm if any digit differs.';
+
+  /// Proximity disclaimer warning that QR codes could theoretically be forwarded.
+  static const String proximityDisclaimer =
+      'Verified matching keys. This does not prove physical proximity if the QR codes were forwarded.';
+
+  /// Disclaimer that an encounter confirms a key, not a legal human identity.
+  static const String notIdentityProof =
+      'This confirms a key, not who a person is. One person can have several keys.';
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is EncounterComparison && other.code == code;
+
+  @override
+  int get hashCode => code.hashCode;
+
+  @override
+  String toString() => 'EncounterComparison($formattedCode)';
+}
+
+/// Optical QR code transport URI encoding and decoding utilities.
+abstract final class QrTransport {
+  /// The standard URI scheme prefix for encounter payloads.
+  static const String uriPrefix = 'mesh:encounter:';
+
+  /// Maximum raw frame bytes permitted in an encounter transport message (matching core MAX_FRAME_BYTES).
+  static const int maxFrameBytes = 512;
+
+  /// Maximum base64 string length for [maxFrameBytes].
+  static const int maxB64Length = ((maxFrameBytes + 2) ~/ 3) * 4;
+
+  /// Encodes a binary encounter payload into a `mesh:encounter:<base64>` URI.
+  static String encodeUri(Uint8List payload) {
+    if (payload.length > maxFrameBytes) {
+      throw FormatException(
+        'Payload length ${payload.length} exceeds maxFrameBytes $maxFrameBytes',
+      );
+    }
+    return '$uriPrefix${base64.encode(payload)}';
+  }
+
+  /// Decodes a `mesh:encounter:<base64>` URI into a raw payload buffer.
+  static Uint8List decodeUri(String uri) {
+    if (!uri.startsWith(uriPrefix)) {
+      throw FormatException(
+        'Invalid QR URI scheme, expected prefix $uriPrefix',
+        uri,
+      );
+    }
+    final b64 = uri.substring(uriPrefix.length);
+    if (b64.length > maxB64Length) {
+      throw FormatException(
+        'QR URI payload length ${b64.length} exceeds maximum base64 length $maxB64Length',
+        uri,
+      );
+    }
+    final bytes = base64.decode(b64);
+    if (bytes.length > maxFrameBytes) {
+      throw FormatException(
+        'Decoded payload length ${bytes.length} exceeds maxFrameBytes $maxFrameBytes',
+      );
+    }
+    return Uint8List.fromList(bytes);
   }
 }

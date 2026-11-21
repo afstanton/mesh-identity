@@ -45,16 +45,42 @@ final class InvalidArgumentsException extends MeshIdentityException {
   const InvalidArgumentsException(super.message);
 }
 
-/// Thrown when attempting to operate on an installation that has already been disposed.
-final class DisposedException extends MeshIdentityException
-    implements StateError {
-  const DisposedException(super.message);
+/// Thrown when an index is out of bounds.
+final class IndexOutOfBoundsException extends MeshIdentityException {
+  const IndexOutOfBoundsException(super.message);
+}
 
-  @override
-  StackTrace? get stackTrace => null;
+/// Thrown when attempting to operate on an object that has already been disposed.
+final class DisposedException extends MeshIdentityException {
+  const DisposedException(super.message);
 }
 
 /// Thrown when a native Rust panic was caught at the FFI boundary.
 final class NativePanicException extends MeshIdentityException {
   const NativePanicException(super.message);
+}
+
+/// Thrown when attempting to start a ceremony while one is already active on this installation.
+final class CeremonyActiveException extends MeshIdentityException {
+  const CeremonyActiveException(super.message);
+}
+
+/// Thrown when using a ceremony handle that has lapsed, expired, or been cancelled.
+final class StaleCeremonyException extends MeshIdentityException {
+  const StaleCeremonyException(super.message);
+}
+
+/// Thrown when an encounter protocol error occurs (e.g. SAS code mismatch or unexpected payload).
+final class EncounterProtocolException extends MeshIdentityException {
+  const EncounterProtocolException(super.message);
+}
+
+/// Thrown when encounter attempts are temporarily paused by the rate-limiting attempt policy.
+final class RateLimitedException extends MeshIdentityException {
+  const RateLimitedException(super.message);
+}
+
+/// Thrown when attempting to confirm an encounter ceremony before a comparison code is available.
+final class NoComparisonException extends MeshIdentityException {
+  const NoComparisonException(super.message);
 }

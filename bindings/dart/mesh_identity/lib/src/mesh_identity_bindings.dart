@@ -191,6 +191,141 @@ external int mesh_installation_import_peer_key(
   int peerPkLen,
 );
 
+@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Void>)>()
+external void mesh_ceremony_free(ffi.Pointer<ffi.Void> handle);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Pointer<ffi.Void>>,
+    ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
+    ffi.Pointer<ffi.Size>,
+  )
+>()
+external int mesh_installation_start(
+  ffi.Pointer<ffi.Void> handle,
+  int now,
+  ffi.Pointer<ffi.Pointer<ffi.Void>> outCeremony,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> outPayload,
+  ffi.Pointer<ffi.Size> outPayloadLen,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Pointer<ffi.Void>>,
+  )
+>()
+external int mesh_installation_open_scanner(
+  ffi.Pointer<ffi.Void> handle,
+  int now,
+  ffi.Pointer<ffi.Pointer<ffi.Void>> outCeremony,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
+    ffi.Pointer<ffi.Size>,
+  )
+>()
+external int mesh_installation_scan_offer(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Void> ceremony,
+  ffi.Pointer<ffi.Uint8> bytes,
+  int bytesLen,
+  int now,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> outPayload,
+  ffi.Pointer<ffi.Size> outPayloadLen,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
+    ffi.Pointer<ffi.Size>,
+  )
+>()
+external int mesh_installation_scan_response(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Void> ceremony,
+  ffi.Pointer<ffi.Uint8> bytes,
+  int bytesLen,
+  int now,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> outPayload,
+  ffi.Pointer<ffi.Size> outPayloadLen,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Uint64,
+  )
+>()
+external int mesh_installation_scan_reveal(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Void> ceremony,
+  ffi.Pointer<ffi.Uint8> bytes,
+  int bytesLen,
+  int now,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Void>,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Uint32>,
+  )
+>()
+external int mesh_installation_comparison(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Void> ceremony,
+  int now,
+  ffi.Pointer<ffi.Uint32> outCode,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Void>,
+    ffi.Uint32,
+    ffi.Uint64,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Pointer<ffi.Char>>,
+  )
+>()
+external int mesh_installation_confirm_and_save(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Void> ceremony,
+  int peerCode,
+  int now,
+  int timestamp,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> outJson,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Void>, ffi.Uint64)
+>()
+external int mesh_installation_cancel_ceremony(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Void> ceremony,
+  int now,
+);
+
 /// Utility for querying last native errors and checking call results.
 abstract final class MeshIdentityBindings {
   static const int meshOk = 0;
@@ -202,6 +337,12 @@ abstract final class MeshIdentityBindings {
   static const int meshErrInvalidSnapshot = -6;
   static const int meshErrNotFound = -7;
   static const int meshErrInternal = -8;
+  static const int meshErrCeremonyActive = -9;
+  static const int meshErrStaleCeremony = -10;
+  static const int meshErrProtocol = -11;
+  static const int meshErrRateLimited = -12;
+  static const int meshErrIndexOutOfBounds = -13;
+  static const int meshErrNoComparison = -14;
 
   /// Retrieve the last recorded error string from native TLS.
   static String? getLastError() {
@@ -234,6 +375,18 @@ abstract final class MeshIdentityBindings {
         throw InvalidSnapshotException(errText);
       case meshErrNotFound:
         throw ContactNotFoundException(errText);
+      case meshErrCeremonyActive:
+        throw CeremonyActiveException(errText);
+      case meshErrStaleCeremony:
+        throw StaleCeremonyException(errText);
+      case meshErrProtocol:
+        throw EncounterProtocolException(errText);
+      case meshErrRateLimited:
+        throw RateLimitedException(errText);
+      case meshErrIndexOutOfBounds:
+        throw IndexOutOfBoundsException(errText);
+      case meshErrNoComparison:
+        throw NoComparisonException(errText);
       default:
         throw GenericMeshIdentityException(errText);
     }

@@ -12,7 +12,8 @@ Built using **Dart Native Assets** (`dart:ffi`), compiling the native Rust engin
 - **Multiple Personas**: Add, select, and manage multiple pseudonymous local personas within a single node.
 - **Durable Snapshots**: Byte-for-byte deterministic serialization and authenticated checkpoint restoration.
 - **Contact Management**: Private local contact records, peer public key importation, and administrative blocking.
-- **Memory Safety & Zeroization**: Native panics are caught at the FFI boundary, pointers and lengths are strictly bounded, and sensitive private seeds are zeroized upon allocation release.
+- **Memory Safety & Zeroization**: Native panics are caught at the FFI boundary, pointers and lengths are strictly bounded before allocation, and native seed buffers are zeroized upon release. (Callers should zeroize their own `Uint8List` seeds with `fillRange(0, 32, 0)` when no longer needed.)
+- **Concurrency**: Instances wrap raw native pointers without internal locks; do not access the same `MeshInstallation` concurrently across multiple isolates.
 
 ---
 
@@ -35,23 +36,21 @@ import 'dart:typed_data';
 import 'package:mesh_identity/mesh_identity.dart';
 
 void main() {
-  // Generate an installation with a random Ed25519 root identity
-  final installation = MeshInstallation.create();
+  // Generate a cryptographically secure 32-byte signing seed
+  final rootSeed = MeshInstallation.generateSeed();
+
+  // Create an installation with an initial root persona
+  final installation = MeshInstallation(seed: rootSeed);
   print('Selected public key: ${installation.selectedIdentity}');
 
-  // Or create deterministically from a 32-byte signing seed:
-  final seed = Uint8List(32)..fillRange(0, 32, 42);
-  final deterministic = MeshInstallation.create(seed: seed);
-
   installation.dispose();
-  deterministic.dispose();
 }
 ```
 
 ### 2. Manage Personas
 
 ```dart
-final installation = MeshInstallation.create();
+final installation = MeshInstallation(seed: rootSeed);
 
 // Add a secondary persona from a private seed
 final personaSeed = Uint8List(32)..fillRange(0, 32, 7);
@@ -97,15 +96,46 @@ if (contact != null) {
 installation.blockContact(peerPublicKey);
 ```
 
+### 5. In-Person Encounter Ceremonies (SAS Verification)
+
+```dart
+// Alice starts as initiator
+final start = alice.startEncounter();
+final offerQrUri = QrTransport.encodeUri(start.offerPayload);
+
+// Bob opens scanner as responder and scans Alice's QR offer
+final bobCeremony = bob.openScanner();
+final offerPayload = QrTransport.decodeUri(offerQrUri);
+final responsePayload = bob.scanOffer(bobCeremony, offerPayload);
+
+// Alice scans Bob's response and generates reveal
+final revealPayload = alice.scanResponse(start.ceremony, responsePayload);
+
+// Bob scans Alice's reveal
+bob.scanReveal(bobCeremony, revealPayload);
+
+// Both display the 6-digit SAS comparison code for mutual human verification
+final aliceSas = alice.getComparison(start.ceremony)!;
+final bobSas = bob.getComparison(bobCeremony)!;
+assert(aliceSas.code == bobSas.code);
+print('Compare SAS codes: ${aliceSas.formattedCode} == ${bobSas.formattedCode}');
+
+// Both confirm each other's code to persist a verified contact
+final aliceContact = alice.confirmAndSave(start.ceremony, bobSas.code);
+final bobContact = bob.confirmAndSave(bobCeremony, aliceSas.code);
+assert(aliceContact.isVerified && bobContact.isVerified);
+```
+
 ---
 
 ## Roadmap
 
 This package is being built in verified, incremental slices:
 - [x] **Slice 1**: Installation lifecycle, personas, snapshots, contact store, and defensive C-FFI boundary.
-- [ ] **Slice 2**: Cryptographic Encounter protocol (initiator / responder, SAS verification, transport abstraction).
-- [ ] **Slice 3**: Byzantine group admission governance, voting ceremonies, and state machines.
-- [ ] **Slice 4**: OpenPGP cross-signing and trust bridging.
+- [x] **Slice 2**: Cryptographic Encounter protocol (initiator / responder, SAS verification, QR transport).
+- [ ] **Slice 3**: Device-to-device handoff (identity migration and voter lock transfer).
+- [ ] **Slice 4**: Byzantine group admission governance, voting ceremonies, and state machines.
+- [ ] **Slice 5**: OpenPGP cross-signing and trust bridging.
 
 ---
 

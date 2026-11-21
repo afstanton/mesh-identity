@@ -1102,3 +1102,65 @@ fn openpgp_contact_import_preserves_snapshot_save_and_restore() {
     let restored = Installation::restore_bytes(&saved, [local_key]).unwrap();
     assert_eq!(restored.total_contacts(), 1);
 }
+
+#[test]
+fn unauthenticated_or_third_party_expiration_does_not_expire_valid_certificate() {
+    let peer_key = SigningKey::from_bytes(&[140; 32]);
+    let peer_expected = peer_key.verifying_key().to_bytes();
+    let uid = b"Peer Valid";
+    let created = 1_750_000_000;
+    let now = UNIX_EPOCH + Duration::from_secs(u64::from(created) + 10);
+    let cert_bytes = issue(&peer_key, uid, created, b"fixture", None)
+        .unwrap()
+        .certificate;
+    let mut cert = SignedPublicKey::from_bytes(&cert_bytes[..]).unwrap();
+
+    // Attacker signs with a third-party key setting KeyExpirationTime = 1 second
+    let attacker_key = SigningKey::from_bytes(&[141; 32]);
+    let (attacker_sec, _) = make_primary_secret(&attacker_key, created);
+    let mut config = pgp::packet::SignatureConfig::v4(
+        pgp::packet::SignatureType::Key,
+        pgp::crypto::public_key::PublicKeyAlgorithm::EdDSALegacy,
+        pgp::crypto::hash::HashAlgorithm::Sha256,
+    );
+    config.hashed_subpackets = vec![
+        pgp::packet::Subpacket::regular(pgp::packet::SubpacketData::SignatureCreationTime(
+            pgp::types::Timestamp::from_secs(created),
+        ))
+        .unwrap(),
+        pgp::packet::Subpacket::regular(pgp::packet::SubpacketData::KeyExpirationTime(
+            pgp::types::Duration::from_secs(1),
+        ))
+        .unwrap(),
+    ];
+    let third_party_sig = config
+        .sign_key(
+            &attacker_sec,
+            &pgp::types::Password::empty(),
+            &cert.primary_key,
+        )
+        .unwrap();
+
+    // Append to direct signatures
+    cert.details.direct_signatures.push(third_party_sig.clone());
+    // Also append to user signatures
+    cert.details.users[0].signatures.push(third_party_sig);
+
+    let mut local = Installation::new(SigningKey::from_bytes(&[142; 32]));
+    let mut rng = StdRng::seed_from_u64(42);
+    let tampered_bytes = cert.to_bytes().unwrap();
+
+    // Must succeed because third-party signature is unauthenticated as a self-signature
+    let result = import_peer(
+        &mut local,
+        &tampered_bytes,
+        peer_expected,
+        uid,
+        now,
+        &mut rng,
+    );
+    assert!(
+        result.is_ok(),
+        "import should succeed despite third-party expiration: {result:?}"
+    );
+}

@@ -66,13 +66,13 @@ cargo build
 # Run core test suite (109 tests)
 cargo test
 
-# Test with OpenPGP interoperability enabled (127 tests, including 18 import/export integration tests)
+# Test with OpenPGP interoperability enabled (128 tests, including 19 import/export integration tests)
 cargo test --features openpgp
 
 # Build and test with group admission enabled (379 tests)
 cargo test --features groups
 
-# Run full test matrix with all features and strict warnings denied (544 tests)
+# Run full test matrix with all features and strict warnings denied (545 tests)
 cargo test --all-features
 cargo clippy --all-targets --all-features -- -D warnings
 ```

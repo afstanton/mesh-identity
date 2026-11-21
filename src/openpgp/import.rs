@@ -302,24 +302,73 @@ fn is_primary_key_expired(cert: &SignedPublicKey, time: SystemTime) -> bool {
     if key_created > time {
         return false;
     }
+
+    let mut latest_sig_time = None;
+    let mut latest_expiration: Option<Duration> = None;
+
+    // Direct-key self-signatures
     for sig in &cert.details.direct_signatures {
-        if let Some(exp) = sig.key_expiration_time() {
-            let exp_dur: Duration = exp.into();
-            if key_created + exp_dur <= time {
-                return true;
-            }
-        }
-    }
-    for user in &cert.details.users {
-        for sig in &user.signatures {
-            if let Some(exp) = sig.key_expiration_time() {
-                let exp_dur: Duration = exp.into();
-                if key_created + exp_dur <= time {
-                    return true;
+        if sig.typ() == Some(SignatureType::Key) && sig.verify_key(&cert.primary_key).is_ok() {
+            if let Some(created) = sig.created() {
+                let sig_time =
+                    SystemTime::UNIX_EPOCH + Duration::from_secs(u64::from(created.as_secs()));
+                if sig_time <= time {
+                    if let Some(exp) = sig.signature_expiration_time() {
+                        let exp_dur: Duration = exp.into();
+                        if exp_dur.as_secs() > 0 && sig_time + exp_dur <= time {
+                            continue;
+                        }
+                    }
+                    if latest_sig_time.is_none_or(|t: SystemTime| sig_time >= t) {
+                        latest_sig_time = Some(sig_time);
+                        latest_expiration = sig.key_expiration_time().map(Into::into);
+                    }
                 }
             }
         }
     }
+
+    // User ID self-certifications
+    for user in &cert.details.users {
+        for sig in &user.signatures {
+            if let Some(typ) = sig.typ() {
+                if matches!(
+                    typ,
+                    SignatureType::CertGeneric
+                        | SignatureType::CertPersona
+                        | SignatureType::CertCasual
+                        | SignatureType::CertPositive
+                ) && sig
+                    .verify_certification(&cert.primary_key, Tag::UserId, &user.id)
+                    .is_ok()
+                {
+                    if let Some(created) = sig.created() {
+                        let sig_time = SystemTime::UNIX_EPOCH
+                            + Duration::from_secs(u64::from(created.as_secs()));
+                        if sig_time <= time {
+                            if let Some(exp) = sig.signature_expiration_time() {
+                                let exp_dur: Duration = exp.into();
+                                if exp_dur.as_secs() > 0 && sig_time + exp_dur <= time {
+                                    continue;
+                                }
+                            }
+                            if latest_sig_time.is_none_or(|t: SystemTime| sig_time > t) {
+                                latest_sig_time = Some(sig_time);
+                                latest_expiration = sig.key_expiration_time().map(Into::into);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(exp_dur) = latest_expiration {
+        if exp_dur.as_secs() > 0 && key_created + exp_dur <= time {
+            return true;
+        }
+    }
+
     false
 }
 
@@ -407,6 +456,7 @@ fn is_subkey_valid(
     let mut has_binding = false;
     let mut is_signing = false;
     let mut latest_binding_time = None;
+    let mut latest_key_expiration: Option<Duration> = None;
 
     for sig in &subkey.signatures {
         if sig.typ() == Some(SignatureType::SubkeyBinding)
@@ -420,7 +470,7 @@ fn is_subkey_valid(
                 if sig_time <= time {
                     if let Some(exp) = sig.signature_expiration_time() {
                         let exp_dur: Duration = exp.into();
-                        if sig_time + exp_dur <= time {
+                        if exp_dur.as_secs() > 0 && sig_time + exp_dur <= time {
                             continue;
                         }
                     }
@@ -428,8 +478,10 @@ fn is_subkey_valid(
                     if sig.key_flags().sign() {
                         is_signing = true;
                     }
-                    latest_binding_time =
-                        Some(latest_binding_time.map_or(sig_time, |t: SystemTime| t.max(sig_time)));
+                    if latest_binding_time.is_none_or(|t: SystemTime| sig_time >= t) {
+                        latest_binding_time = Some(sig_time);
+                        latest_key_expiration = sig.key_expiration_time().map(Into::into);
+                    }
                 }
             }
         }
@@ -441,12 +493,9 @@ fn is_subkey_valid(
 
     let key_created =
         SystemTime::UNIX_EPOCH + Duration::from_secs(u64::from(subkey.key.created_at().as_secs()));
-    for sig in &subkey.signatures {
-        if let Some(exp) = sig.key_expiration_time() {
-            let exp_dur: Duration = exp.into();
-            if key_created + exp_dur <= time {
-                return false;
-            }
+    if let Some(exp_dur) = latest_key_expiration {
+        if exp_dur.as_secs() > 0 && key_created + exp_dur <= time {
+            return false;
         }
     }
 

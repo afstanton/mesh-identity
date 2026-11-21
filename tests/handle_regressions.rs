@@ -1,6 +1,6 @@
 #![cfg(feature = "groups")]
 mod support;
-use ciborium::value::Value;
+use cbor2::Value;
 use mesh_identity::groups::Policy;
 use mesh_identity::groups::handle::*;
 use mesh_identity::session::installation::{Installation, InstallationSnapshot};
@@ -132,7 +132,7 @@ fn candidate_must_not_accept_a_rewritten_roster_with_the_same_head() {
     let original = &held[0].2;
     let (tag, body) = decode_frame(original).unwrap();
     let saved = w.h(1).group(group).unwrap().to_bytes().unwrap();
-    let mut wire: Value = ciborium::from_reader(saved.as_slice()).unwrap();
+    let mut wire: Value = cbor2::from_reader(saved.as_slice()).unwrap();
     let Value::Map(fields) = &mut wire else {
         panic!()
     };
@@ -150,7 +150,7 @@ fn candidate_must_not_accept_a_rewritten_roster_with_the_same_head() {
         }
     }
     let mut modified_body = body[..32].to_vec();
-    ciborium::into_writer(&wire, &mut modified_body).unwrap();
+    cbor2::to_writer(&wire, &mut modified_body).unwrap();
     let modified = encode_frame(tag, &modified_body).unwrap();
     let refused = w.h(9).receive_bytes(pk(1), &modified, 22);
     assert!(
@@ -342,7 +342,7 @@ fn invitation_parent_cannot_be_rewritten_under_the_same_signed_binding() {
     let original = w.h(1).take_outgoing().remove(0);
     let (tag, body) = decode_frame(&original.bytes).unwrap();
     const PREFIX: usize = 213 + 216 + 32;
-    let mut history: Value = ciborium::from_reader(&body[PREFIX..]).unwrap();
+    let mut history: Value = cbor2::from_reader(&body[PREFIX..]).unwrap();
     let Value::Map(entries) = &mut history else {
         panic!()
     };
@@ -350,9 +350,10 @@ fn invitation_parent_cannot_be_rewritten_under_the_same_signed_binding() {
         .iter_mut()
         .find(|(k, _)| k.as_text() == Some("genesis"))
         .unwrap();
-    let mut raw: Vec<u8> = genesis
-        .as_array()
-        .unwrap()
+    let Value::Array(genesis_items) = genesis else {
+        panic!()
+    };
+    let mut raw: Vec<u8> = genesis_items
         .iter()
         .map(|v| u8::try_from(v.as_integer().unwrap()).unwrap())
         .collect();
@@ -360,7 +361,7 @@ fn invitation_parent_cannot_be_rewritten_under_the_same_signed_binding() {
     raw[pos..pos + 32].copy_from_slice(&pk(8));
     *genesis = Value::Array(raw.into_iter().map(|b| Value::Integer(b.into())).collect());
     let mut changed = body[..PREFIX].to_vec();
-    ciborium::into_writer(&history, &mut changed).unwrap();
+    cbor2::to_writer(&history, &mut changed).unwrap();
     let changed = encode_frame(tag, &changed).unwrap();
     assert!(!w.h(9).receive_bytes(pk(1), &changed, 21).is_empty());
     assert!(w.h(9).pending_invitations().is_empty());
@@ -470,7 +471,7 @@ fn redelivered_certificate_and_snapshot_frames_must_be_ignored_idempotently() {
 fn restore_rejects_oversize_ops_or_left_lists() {
     let mut h = GroupHandle::new(Installation::new(sk(1)));
     let (_, blob) = h.save(0).unwrap();
-    let mut wire: Value = ciborium::from_reader(blob.as_slice()).unwrap();
+    let mut wire: Value = cbor2::from_reader(blob.as_slice()).unwrap();
     let Value::Map(ref mut fields) = wire else {
         panic!()
     };
@@ -492,7 +493,7 @@ fn restore_rejects_oversize_ops_or_left_lists() {
     ops_entry.1 = Value::Array(dummy_ops);
 
     let mut bad_blob = Vec::new();
-    ciborium::into_writer(&wire, &mut bad_blob).unwrap();
+    cbor2::to_writer(&wire, &mut bad_blob).unwrap();
     let res = GroupHandle::restore(&bad_blob, [sk(1)]);
     assert_eq!(
         res.err(),

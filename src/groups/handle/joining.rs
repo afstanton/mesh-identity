@@ -68,9 +68,9 @@ impl History {
         if bytes.len() > MAX_FRAME_BYTES {
             return Err(Reason::TooLarge);
         }
-        let mut input = bytes;
-        let history: Self = ciborium::from_reader(&mut input).map_err(|_| Reason::Malformed)?;
-        if !input.is_empty() {
+        let mut cursor = std::io::Cursor::new(bytes);
+        let history: Self = cbor2::from_reader(&mut cursor).map_err(|_| Reason::Malformed)?;
+        if (cursor.position() as usize) != bytes.len() {
             return Err(Reason::Malformed);
         }
         Ok(history)

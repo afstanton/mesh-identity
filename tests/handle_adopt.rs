@@ -172,9 +172,9 @@ fn a_restart_after_the_save_keeps_the_group_and_where_it_came_from() {
 }
 
 /// Edit a field of the first `formed` record in a saved blob.
-fn tamper(blob: &[u8], edit: impl Fn(&mut ciborium::Value)) -> Vec<u8> {
-    let mut value: ciborium::Value = ciborium::from_reader(blob).unwrap();
-    let ciborium::Value::Map(entries) = &mut value else {
+fn tamper(blob: &[u8], edit: impl Fn(&mut cbor2::Value)) -> Vec<u8> {
+    let mut value: cbor2::Value = cbor2::from_reader(blob).unwrap();
+    let cbor2::Value::Map(entries) = &mut value else {
         panic!("a handle blob is a map")
     };
     for (key, val) in entries.iter_mut() {
@@ -183,7 +183,7 @@ fn tamper(blob: &[u8], edit: impl Fn(&mut ciborium::Value)) -> Vec<u8> {
         }
     }
     let mut out = Vec::new();
-    ciborium::into_writer(&value, &mut out).unwrap();
+    cbor2::to_writer(&value, &mut out).unwrap();
     out
 }
 
@@ -195,26 +195,26 @@ fn a_saved_formed_record_that_does_not_match_its_group_is_refused() {
     let (_, blob) = s.a.h(2).save(30).unwrap();
     assert!(GroupHandle::restore(&blob, [sk(2)]).is_ok());
     let field = |which: &'static str| {
-        move |formed: &mut ciborium::Value| {
-            let ciborium::Value::Array(records) = formed else {
+        move |formed: &mut cbor2::Value| {
+            let cbor2::Value::Array(records) = formed else {
                 panic!()
             };
-            let ciborium::Value::Array(pair) = &mut records[0] else {
+            let cbor2::Value::Array(pair) = &mut records[0] else {
                 panic!()
             };
-            let ciborium::Value::Map(fields) = &mut pair[1] else {
+            let cbor2::Value::Map(fields) = &mut pair[1] else {
                 panic!()
             };
             for (key, val) in fields.iter_mut() {
                 if key.as_text() == Some(which) {
                     match val {
-                        ciborium::Value::Bytes(bytes) => bytes[0] ^= 1,
-                        ciborium::Value::Array(items) => {
-                            let ciborium::Value::Integer(n) = &items[0] else {
+                        cbor2::Value::Bytes(bytes) => bytes[0] ^= 1,
+                        cbor2::Value::Array(items) => {
+                            let cbor2::Value::Integer(n) = &items[0] else {
                                 panic!()
                             };
                             let n: i128 = (*n).into();
-                            items[0] = ciborium::Value::Integer(((n ^ 1) as i64).into());
+                            items[0] = cbor2::Value::Integer(((n ^ 1) as i64).into());
                         }
                         _ => panic!("unexpected field shape"),
                     }
@@ -236,17 +236,17 @@ fn a_saved_formed_record_that_does_not_match_its_group_is_refused() {
 fn an_older_blob_format_is_refused() {
     let mut s = setup();
     let (_, blob) = s.a.h(2).save(30).unwrap();
-    let mut value: ciborium::Value = ciborium::from_reader(&blob[..]).unwrap();
-    let ciborium::Value::Map(entries) = &mut value else {
+    let mut value: cbor2::Value = cbor2::from_reader(&blob[..]).unwrap();
+    let cbor2::Value::Map(entries) = &mut value else {
         panic!()
     };
     for (key, val) in entries.iter_mut() {
         if key.as_text() == Some("version") {
-            *val = ciborium::Value::Integer(2.into());
+            *val = cbor2::Value::Integer(2.into());
         }
     }
     let mut old = Vec::new();
-    ciborium::into_writer(&value, &mut old).unwrap();
+    cbor2::to_writer(&value, &mut old).unwrap();
     assert_eq!(
         GroupHandle::restore(&old, [sk(2)]).err(),
         Some(HandleError::UnsupportedVersion(2))
@@ -303,8 +303,8 @@ fn removing_a_formed_groups_owner_keeps_the_handle_restorable() {
     assert!(GroupHandle::restore(&blob, [sk(10)]).is_ok());
 }
 
-fn saved_field<'a>(v: &'a mut ciborium::Value, name: &str) -> &'a mut ciborium::Value {
-    let ciborium::Value::Map(fields) = v else {
+fn saved_field<'a>(v: &'a mut cbor2::Value, name: &str) -> &'a mut cbor2::Value {
+    let cbor2::Value::Map(fields) = v else {
         panic!()
     };
     &mut fields
@@ -313,20 +313,20 @@ fn saved_field<'a>(v: &'a mut ciborium::Value, name: &str) -> &'a mut ciborium::
         .unwrap()
         .1
 }
-fn saved_bytes(v: &ciborium::Value) -> Vec<u8> {
+fn saved_bytes(v: &cbor2::Value) -> Vec<u8> {
     match v {
-        ciborium::Value::Bytes(b) => b.clone(),
-        ciborium::Value::Array(a) => a
+        cbor2::Value::Bytes(b) => b.clone(),
+        cbor2::Value::Array(a) => a
             .iter()
             .map(|i| u8::try_from(i.as_integer().unwrap()).unwrap())
             .collect(),
         _ => panic!(),
     }
 }
-fn set_saved_bytes(v: &mut ciborium::Value, b: Vec<u8>) {
-    *v = ciborium::Value::Array(
+fn set_saved_bytes(v: &mut cbor2::Value, b: Vec<u8>) {
+    *v = cbor2::Value::Array(
         b.into_iter()
-            .map(|x| ciborium::Value::Integer(x.into()))
+            .map(|x| cbor2::Value::Integer(x.into()))
             .collect(),
     );
 }
@@ -339,35 +339,35 @@ fn restore_rejects_genesis_rules_that_differ_from_the_formation() {
     let h = s.a.h(2);
     h.adopt_formation(&f).unwrap();
     let (_, blob) = h.save(30).unwrap();
-    let mut v: ciborium::Value = ciborium::from_reader(&blob[..]).unwrap();
+    let mut v: cbor2::Value = cbor2::from_reader(&blob[..]).unwrap();
     // Change both the cache and replay genesis, leaving agreed proposal and binding untouched.
-    let ciborium::Value::Array(entries) = saved_field(&mut v, "groups") else {
+    let cbor2::Value::Array(entries) = saved_field(&mut v, "groups") else {
         panic!()
     };
     for entry in entries {
-        let ciborium::Value::Array(pair) = entry else {
+        let cbor2::Value::Array(pair) = entry else {
             panic!()
         };
-        let ciborium::Value::Array(scope) = &pair[0] else {
+        let cbor2::Value::Array(scope) = &pair[0] else {
             panic!()
         };
         if u64::try_from(scope[1].as_integer().unwrap()).unwrap() != id {
             continue;
         }
-        let mut group: ciborium::Value = ciborium::from_reader(&saved_bytes(&pair[1])[..]).unwrap();
+        let mut group: cbor2::Value = cbor2::from_reader(&saved_bytes(&pair[1])[..]).unwrap();
         set_saved_bytes(saved_field(&mut group, "policy"), vec![2]);
         let mut bytes = vec![];
-        ciborium::into_writer(&group, &mut bytes).unwrap();
+        cbor2::to_writer(&group, &mut bytes).unwrap();
         set_saved_bytes(&mut pair[1], bytes);
     }
-    let ciborium::Value::Array(entries) = saved_field(&mut v, "histories") else {
+    let cbor2::Value::Array(entries) = saved_field(&mut v, "histories") else {
         panic!()
     };
     for entry in entries {
-        let ciborium::Value::Array(pair) = entry else {
+        let cbor2::Value::Array(pair) = entry else {
             panic!()
         };
-        let ciborium::Value::Array(scope) = &pair[0] else {
+        let cbor2::Value::Array(scope) = &pair[0] else {
             panic!()
         };
         if u64::try_from(scope[1].as_integer().unwrap()).unwrap() != id {
@@ -382,7 +382,7 @@ fn restore_rejects_genesis_rules_that_differ_from_the_formation() {
         set_saved_bytes(genesis, bytes);
     }
     let mut bad = vec![];
-    ciborium::into_writer(&v, &mut bad).unwrap();
+    cbor2::to_writer(&v, &mut bad).unwrap();
     assert!(
         GroupHandle::restore(&bad, [sk(2)]).is_err(),
         "rules not agreed in the signed proposal were accepted"
@@ -508,7 +508,7 @@ fn restore_rejects_oversized_histories_or_formed_lists_upfront() {
 
     // Oversized formed list
     let bad_formed = tamper(&blob, |formed| {
-        let ciborium::Value::Array(records) = formed else {
+        let cbor2::Value::Array(records) = formed else {
             panic!()
         };
         let first = records[0].clone();
@@ -523,13 +523,13 @@ fn restore_rejects_oversized_histories_or_formed_lists_upfront() {
     );
 
     // Oversized histories list
-    let mut value: ciborium::Value = ciborium::from_reader(&blob[..]).unwrap();
-    let ciborium::Value::Map(entries) = &mut value else {
+    let mut value: cbor2::Value = cbor2::from_reader(&blob[..]).unwrap();
+    let cbor2::Value::Map(entries) = &mut value else {
         panic!()
     };
     for (key, val) in entries.iter_mut() {
         if key.as_text() == Some("histories") {
-            let ciborium::Value::Array(records) = val else {
+            let cbor2::Value::Array(records) = val else {
                 panic!()
             };
             let first = records[0].clone();
@@ -539,7 +539,7 @@ fn restore_rejects_oversized_histories_or_formed_lists_upfront() {
         }
     }
     let mut bad_histories = Vec::new();
-    ciborium::into_writer(&value, &mut bad_histories).unwrap();
+    cbor2::to_writer(&value, &mut bad_histories).unwrap();
     assert_eq!(
         GroupHandle::restore(&bad_histories, [sk(2)]).err(),
         Some(HandleError::TooLarge),

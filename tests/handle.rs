@@ -265,17 +265,17 @@ fn a_gated_device_stays_gated_through_a_handle_restore() {
 fn an_unknown_handle_version_is_refused_and_the_previous_handle_stays_usable() {
     let mut h = handle(1);
     let (_, blob) = h.save(0).unwrap();
-    let mut value: ciborium::Value = ciborium::from_reader(&blob[..]).unwrap();
-    let ciborium::Value::Map(entries) = &mut value else {
+    let mut value: cbor2::Value = cbor2::from_reader(&blob[..]).unwrap();
+    let cbor2::Value::Map(entries) = &mut value else {
         panic!("a handle blob is a map")
     };
     for (key, val) in entries.iter_mut() {
         if key.as_text() == Some("version") {
-            *val = ciborium::Value::Integer((HANDLE_FORMAT_VERSION + 1).into());
+            *val = cbor2::Value::Integer((HANDLE_FORMAT_VERSION + 1).into());
         }
     }
     let mut future = Vec::new();
-    ciborium::into_writer(&value, &mut future).unwrap();
+    cbor2::to_writer(&value, &mut future).unwrap();
     assert_eq!(
         GroupHandle::restore(&future, [sk(1)]).err(),
         Some(HandleError::UnsupportedVersion(HANDLE_FORMAT_VERSION + 1))

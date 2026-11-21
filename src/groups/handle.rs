@@ -863,7 +863,7 @@ impl GroupHandle {
         let mut body = frame.to_vec();
         body.extend_from_slice(&voucher_wire);
         body.extend_from_slice(&nonce);
-        ciborium::into_writer(&history, &mut body).map_err(|_| HandleError::Invalid)?;
+        cbor2::to_writer(&history, &mut body).map_err(|_| HandleError::Invalid)?;
         let envelope = encode_frame(Tag::Invitation, &body).map_err(|_| HandleError::Invalid)?;
         let binding = proposal.decision_binding();
         // The members get the same frame: they vote on the admission once consent arrives.
@@ -1275,7 +1275,7 @@ impl GroupHandle {
             formed: self.formed.iter().map(|(k, v)| (*k, v.clone())).collect(),
         };
         let mut bytes = Vec::new();
-        ciborium::into_writer(&wire, &mut bytes).map_err(|_| HandleError::Invalid)?;
+        cbor2::to_writer(&wire, &mut bytes).map_err(|_| HandleError::Invalid)?;
         if bytes.len() > MAX_HANDLE_BYTES {
             return Err(HandleError::TooLarge);
         }
@@ -1343,10 +1343,10 @@ impl GroupHandle {
         if blob.len() > MAX_HANDLE_BYTES {
             return Err(HandleError::TooLarge);
         }
-        let mut input = blob;
+        let mut cursor = std::io::Cursor::new(blob);
         let wire: HandleWire =
-            ciborium::from_reader(&mut input).map_err(|_| HandleError::Malformed)?;
-        if !input.is_empty() {
+            cbor2::from_reader(&mut cursor).map_err(|_| HandleError::Malformed)?;
+        if (cursor.position() as usize) != blob.len() {
             return Err(HandleError::Malformed);
         }
         if wire.version != HANDLE_FORMAT_VERSION {

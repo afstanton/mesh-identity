@@ -180,7 +180,7 @@ impl VouchedGroup {
             degraded_recovery: self.degraded_recovery.iter().map(|k| k.0).collect(),
         };
         let mut bytes = Vec::new();
-        ciborium::into_writer(&wire, &mut bytes).map_err(|_| GroupSnapshotError::Invalid)?;
+        cbor2::to_writer(&wire, &mut bytes).map_err(|_| GroupSnapshotError::Invalid)?;
         if bytes.len() > MAX_GROUP_BYTES {
             return Err(GroupSnapshotError::TooLarge);
         }
@@ -192,9 +192,9 @@ impl VouchedGroup {
         if bytes.len() > MAX_GROUP_BYTES {
             return Err(TooLarge);
         }
-        let mut input = bytes;
-        let wire: GroupWire = ciborium::from_reader(&mut input).map_err(|_| Malformed)?;
-        if !input.is_empty() {
+        let mut cursor = std::io::Cursor::new(bytes);
+        let wire: GroupWire = cbor2::from_reader(&mut cursor).map_err(|_| Malformed)?;
+        if (cursor.position() as usize) != bytes.len() {
             return Err(Malformed);
         }
         if wire.version != GROUP_FORMAT_VERSION {

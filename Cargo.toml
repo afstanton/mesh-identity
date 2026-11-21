@@ -1,6 +1,6 @@
 [package]
 name = "mesh-identity"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -24,7 +24,6 @@ serde_bytes = "0.11"
 base64 = "0.22"
 
 # Group admission dependencies (optional)
-ciborium = { version = "0.2", optional = true }
 serde_json = { version = "1.0", optional = true }
 
 # OpenPGP interoperability (pure Rust, optional)
@@ -38,6 +37,6 @@ serde_json = "1.0"
 
 [features]
 default = []
-groups = ["dep:ciborium", "dep:serde_json"]
+groups = ["dep:serde_json"]
 openpgp = ["dep:pgp"]
 test-support = []

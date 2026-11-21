@@ -32,8 +32,9 @@ impl Membership {
     }
 }
 
+/// Local group membership departures, tombstones, and acknowledged backup-rosters.
 #[derive(Debug, Default, Deserialize, Serialize)]
-pub struct LocalInstallation {
+pub struct MemberLocalState {
     identities: BTreeMap<Identity, String>,
     departures: BTreeSet<Membership>,
     #[serde(default)]
@@ -42,13 +43,16 @@ pub struct LocalInstallation {
     backup_rosters: Option<BTreeMap<u64, BackupRoster>>,
 }
 
+/// Legacy alias for [`MemberLocalState`].
+pub type LocalInstallation = MemberLocalState;
+
 #[derive(Debug, Deserialize, Serialize)]
 struct BackupRoster {
     revision: u64,
     history: [u8; 32],
 }
 
-impl LocalInstallation {
+impl MemberLocalState {
     pub fn add_identity(&mut self, identity: Identity, label: String) -> bool {
         use std::collections::btree_map::Entry;
         match self.identities.entry(identity) {

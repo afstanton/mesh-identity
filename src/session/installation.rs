@@ -287,12 +287,15 @@ struct Persona {
 }
 
 /// Local-only collection of contacts recognized as belonging to one person.
-pub struct PersonGroup {
+pub struct LinkedPersonContacts {
     local: Identity,
     peers: BTreeSet<Identity>,
 }
 
-impl PersonGroup {
+/// Legacy alias for [`LinkedPersonContacts`].
+pub type PersonGroup = LinkedPersonContacts;
+
+impl LinkedPersonContacts {
     pub fn local_identity(&self) -> Identity {
         self.local
     }
@@ -742,17 +745,26 @@ impl Installation {
             .ok_or(Error::UnknownIdentity)
     }
 
-    pub fn group_contacts(
+    pub fn linked_person_contacts(
         &self,
         local: Identity,
         peers: impl IntoIterator<Item = Identity>,
-    ) -> Result<PersonGroup, Error> {
+    ) -> Result<LinkedPersonContacts, Error> {
         let contacts = self.contacts(local).ok_or(Error::UnknownIdentity)?;
         let peers: BTreeSet<_> = peers.into_iter().collect();
         if peers.len() < 2 || peers.iter().any(|peer| contacts.get(peer).is_none()) {
             return Err(Error::InvalidContactGroup);
         }
-        Ok(PersonGroup { local, peers })
+        Ok(LinkedPersonContacts { local, peers })
+    }
+
+    /// Legacy alias for [`Installation::linked_person_contacts`].
+    pub fn group_contacts(
+        &self,
+        local: Identity,
+        peers: impl IntoIterator<Item = Identity>,
+    ) -> Result<LinkedPersonContacts, Error> {
+        self.linked_person_contacts(local, peers)
     }
 
     fn expire(&mut self, now: u64) {

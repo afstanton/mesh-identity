@@ -93,8 +93,9 @@ These bounds protect the crate from denial-of-service, memory exhaustion, and sn
 ## 4. Testing & Parity Verification
 
 All test suites must maintain strict parity:
-* **Core Baseline:** 105 tests default.
-* **Groups Baseline:** 512 tests with all features (512 passed, 1 ignored long-running sweep).
+* **Core Baseline:** 107 tests default.
+* **OpenPGP Baseline:** 107 tests with `--features openpgp` (18 OpenPGP import/export integration tests).
+* **Groups & All-Features Baseline:** 532 tests with all features (532 passed, 1 ignored long-running sweep).
 * Tests and known-answer vectors must be ported alongside the code and run with:
   ```bash
   cargo test

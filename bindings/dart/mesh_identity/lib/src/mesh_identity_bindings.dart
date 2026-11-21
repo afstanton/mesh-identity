@@ -715,6 +715,172 @@ external int mesh_group_handle_restore(
   ffi.Pointer<ffi.Pointer<ffi.Void>> outHandle,
 );
 
+// OpenPGP Interoperability Bridge (Slice 5)
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Pointer<ffi.Char>>,
+  )
+>()
+external int mesh_openpgp_inspect_certificate(
+  ffi.Pointer<ffi.Uint8> certPtr,
+  int certLen,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> outJson,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Pointer<ffi.Char>>,
+  )
+>()
+external int mesh_installation_openpgp_import_peer(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Uint8> certPtr,
+  int certLen,
+  ffi.Pointer<ffi.Uint8> expectedPkPtr,
+  int expectedPkLen,
+  ffi.Pointer<ffi.Uint8> uidPtr,
+  int uidLen,
+  int timestampSecs,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> outProvenanceJson,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Pointer<ffi.Char>>,
+    ffi.Pointer<ffi.Uint8>,
+  )
+>()
+external int mesh_installation_openpgp_import_owned(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Uint8> certPtr,
+  int certLen,
+  ffi.Pointer<ffi.Uint8> expectedPkPtr,
+  int expectedPkLen,
+  ffi.Pointer<ffi.Uint8> uidPtr,
+  int uidLen,
+  int timestampSecs,
+  ffi.Pointer<ffi.Uint8> passphrasePtr,
+  int passphraseLen,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> outProvenanceJson,
+  ffi.Pointer<ffi.Uint8> outSeed,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Uint8>,
+  )
+>()
+external int mesh_openpgp_extract_secret_seed(
+  ffi.Pointer<ffi.Uint8> certPtr,
+  int certLen,
+  ffi.Pointer<ffi.Uint8> expectedPkPtr,
+  int expectedPkLen,
+  ffi.Pointer<ffi.Uint8> uidPtr,
+  int uidLen,
+  int timestampSecs,
+  ffi.Pointer<ffi.Uint8> passphrasePtr,
+  int passphraseLen,
+  ffi.Pointer<ffi.Uint8> outSeed,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Int32,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Uint32,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Pointer<ffi.Void>>,
+    ffi.Pointer<ffi.Pointer<ffi.Char>>,
+    ffi.Pointer<ffi.Pointer<ffi.Char>>,
+  )
+>()
+external int mesh_installation_openpgp_preview(
+  ffi.Pointer<ffi.Void> handle,
+  int profile,
+  ffi.Pointer<ffi.Uint8> uidPtr,
+  int uidLen,
+  int createdSecs,
+  ffi.Pointer<ffi.Uint8> docPtr,
+  int docLen,
+  ffi.Pointer<ffi.Uint8> peerCertPtr,
+  int peerCertLen,
+  ffi.Pointer<ffi.Uint8> peerUidPtr,
+  int peerUidLen,
+  ffi.Pointer<ffi.Pointer<ffi.Void>> outPreview,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> outWarning,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> outPeerFp,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
+    ffi.Pointer<ffi.Size>,
+    ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
+    ffi.Pointer<ffi.Size>,
+    ffi.Pointer<ffi.Pointer<ffi.Char>>,
+  )
+>()
+external int mesh_openpgp_preview_confirm(
+  ffi.Pointer<ffi.Void> previewHandle,
+  ffi.Pointer<ffi.Void> installationHandle,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> outCertPtr,
+  ffi.Pointer<ffi.Size> outCertLen,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> outDetachedPtr,
+  ffi.Pointer<ffi.Size> outDetachedLen,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> outPeerSignaturesJson,
+);
+
+@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Void>)>()
+external void mesh_openpgp_preview_free(ffi.Pointer<ffi.Void> handle);
+
+@ffi.Native<
+  ffi.Int32 Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Uint8>, ffi.Size)
+>()
+external int mesh_installation_openpgp_remember_revocations(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Uint8> revPtr,
+  int revLen,
+);
+
 /// Utility for querying last native errors and checking call results.
 abstract final class MeshIdentityBindings {
   static const int meshOk = 0;
@@ -745,6 +911,15 @@ abstract final class MeshIdentityBindings {
   static const int meshErrTooLarge = -25;
   static const int meshErrMalformed = -26;
   static const int meshErrFormation = -27;
+
+  // OpenPGP error codes
+  static const int meshErrOpenPgpCertificate = -3001;
+  static const int meshErrOpenPgpInvalidBinding = -3002;
+  static const int meshErrOpenPgpKeyMismatch = -3003;
+  static const int meshErrOpenPgpSecretMaterial = -3004;
+  static const int meshErrOpenPgpSecretMissing = -3005;
+  static const int meshErrOpenPgpRevocationCapacity = -3006;
+  static const int meshErrOpenPgpPreviewExpired = -3007;
 
   /// Retrieve the last recorded error string from native TLS.
   static String? getLastError() {
@@ -815,6 +990,20 @@ abstract final class MeshIdentityBindings {
         throw MalformedGroupException(errText);
       case meshErrFormation:
         throw GroupFormationException(errText);
+      case meshErrOpenPgpCertificate:
+        throw OpenPgpCertificateException(errText);
+      case meshErrOpenPgpInvalidBinding:
+        throw OpenPgpInvalidBindingException(errText);
+      case meshErrOpenPgpKeyMismatch:
+        throw OpenPgpKeyMismatchException(errText);
+      case meshErrOpenPgpSecretMaterial:
+        throw OpenPgpSecretMaterialException(errText);
+      case meshErrOpenPgpSecretMissing:
+        throw OpenPgpSecretMissingException(errText);
+      case meshErrOpenPgpRevocationCapacity:
+        throw OpenPgpRevocationCapacityException(errText);
+      case meshErrOpenPgpPreviewExpired:
+        throw OpenPgpPreviewExpiredException(errText);
       default:
         throw GenericMeshIdentityException(errText);
     }

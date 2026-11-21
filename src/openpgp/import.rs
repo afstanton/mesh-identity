@@ -41,7 +41,7 @@ pub(super) fn parse_secret_key(bytes: &[u8]) -> Result<SignedSecretKey, ImportEr
     SignedSecretKey::from_bytes(bytes).map_err(|error| ImportError::Certificate(error.into()))
 }
 
-pub(super) fn parse_public_peer(bytes: &[u8]) -> Result<SignedPublicKey, ImportError> {
+pub fn parse_public_peer(bytes: &[u8]) -> Result<SignedPublicKey, ImportError> {
     if bytes.len() > MAX_CERTIFICATE_BYTES {
         return Err(ImportError::Certificate(
             "certificate exceeds the size limit".into(),
@@ -122,14 +122,15 @@ pub fn import_peer<'a>(
 /// Unlock the selected signing key and import it as an owned Mesh identity.
 /// Certificate metadata remains separate from Encounter verification. Verified
 /// revocations are remembered even when binding validation or unlocking fails.
-pub fn import_owned(
+/// Import an owned identity and return both its 32-byte Ed25519 seed and Provenance.
+pub fn import_owned_with_seed(
     installation: &mut Installation,
     certificate: &[u8],
     expected: Identity,
     user_id: &[u8],
     time: SystemTime,
     passphrase: &[u8],
-) -> Result<Provenance, ImportError> {
+) -> Result<([u8; 32], Provenance), ImportError> {
     if certificate.len() > MAX_CERTIFICATE_BYTES {
         return Err(ImportError::Certificate(
             "certificate exceeds the size limit".into(),
@@ -205,13 +206,103 @@ pub fn import_owned(
     installation
         .openpgp_revocations
         .check_capacity(&provenance.primary)?;
+    let seed = signing.to_bytes();
     installation
         .import_identity(signing, expected)
         .map_err(ImportError::Contact)?;
     installation
         .openpgp_revocations
         .protect(provenance.primary.clone());
-    Ok(provenance)
+    Ok((seed, provenance))
+}
+
+pub fn import_owned(
+    installation: &mut Installation,
+    certificate: &[u8],
+    expected: Identity,
+    user_id: &[u8],
+    time: SystemTime,
+    passphrase: &[u8],
+) -> Result<Provenance, ImportError> {
+    import_owned_with_seed(
+        installation,
+        certificate,
+        expected,
+        user_id,
+        time,
+        passphrase,
+    )
+    .map(|(_seed, prov)| prov)
+}
+
+/// Standalone extraction of the 32-byte Ed25519 seed from an OpenPGP secret key certificate.
+pub fn extract_secret_seed(
+    certificate: &[u8],
+    expected: Identity,
+    user_id: &[u8],
+    time: SystemTime,
+    passphrase: &[u8],
+) -> Result<[u8; 32], ImportError> {
+    if certificate.len() > MAX_CERTIFICATE_BYTES {
+        return Err(ImportError::Certificate(
+            "certificate exceeds the size limit".into(),
+        ));
+    }
+    let sec_key = match parse_secret_key(certificate) {
+        Ok(k) => k,
+        Err(_) => {
+            if parse_certificate(certificate).is_ok() {
+                return Err(ImportError::SecretMissing);
+            } else {
+                return Err(ImportError::Certificate(
+                    "failed to parse secret key".into(),
+                ));
+            }
+        }
+    };
+
+    let pub_key = sec_key.to_public_key();
+    validate_binding(&pub_key, user_id, time)?;
+
+    let pw = pgp::types::Password::from(passphrase);
+    let signing = if matches_public(sec_key.primary_key.public_params(), &expected) {
+        if is_key_revoked(&pub_key, time) || is_primary_key_expired(&pub_key, time) {
+            return Err(ImportError::KeyMismatch);
+        }
+        sec_key
+            .primary_key
+            .unlock(&pw, |_pub, plain| extract_ed25519_seed(plain))
+            .map_err(|_| ImportError::UnlockFailed)?
+            .map_err(|_| ImportError::InvalidSecret)?
+    } else {
+        let mut found = None;
+        for sub in &sec_key.secret_subkeys {
+            if matches_public(sub.key.public_params(), &expected) {
+                let pub_sub = pub_key
+                    .public_subkeys
+                    .iter()
+                    .find(|ps| matches_public(ps.key.public_params(), &expected));
+                if let Some(pub_sub) = pub_sub {
+                    if !is_subkey_valid(&pub_key, pub_sub, time) {
+                        return Err(ImportError::KeyMismatch);
+                    }
+                } else {
+                    return Err(ImportError::KeyMismatch);
+                }
+
+                let signing = sub
+                    .key
+                    .unlock(&pw, |_pub, plain| extract_ed25519_seed(plain))
+                    .map_err(|_| ImportError::UnlockFailed)?
+                    .map_err(|_| ImportError::InvalidSecret)?;
+                found = Some(signing);
+                break;
+            }
+        }
+        found.ok_or(ImportError::KeyMismatch)?
+    };
+
+    Ok(signing.to_bytes())
 }
 
 pub fn validate_binding(

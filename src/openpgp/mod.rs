@@ -15,7 +15,7 @@ pub enum ExportProfile {
     V6,
 }
 
-pub(super) fn parse_public_peer(bytes: &[u8]) -> Result<SignedPublicKey, ImportError> {
+pub fn parse_public_peer(bytes: &[u8]) -> Result<SignedPublicKey, ImportError> {
     import::parse_public_peer(bytes)
 }
 
@@ -481,6 +481,9 @@ fn issue_profile(
 }
 
 mod import;
-pub use import::{ImportError, MAX_CERTIFICATE_BYTES, Provenance, import_owned, import_peer};
+pub use import::{
+    ImportError, MAX_CERTIFICATE_BYTES, Provenance, extract_secret_seed, import_owned,
+    import_owned_with_seed, import_peer,
+};
 mod revocations;
 pub use revocations::{PeerRevocations, PeerRevocationsWire, remember_peer_revocations};

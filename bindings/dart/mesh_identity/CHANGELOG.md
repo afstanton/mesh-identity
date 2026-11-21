@@ -1,3 +1,21 @@
+## 0.5.0
+
+- Added OpenPGP Interoperability Bridge (Slice 5).
+- Certificate inspection: `MeshInstallation.inspectOpenPgpCertificate` and `OpenPgpCertificate.fromBytes` parsing raw bytes or ASCII armor for v4 and v6 OpenPGP public certificates, returning primary key bytes, algorithms, user IDs, fingerprints, and subkeys.
+- Statutory privacy disclosure & export preview: `createOpenPgpPreview` generating an `OpenPgpExportPreview` carrying mandatory user-facing privacy notice (`OpenPgpExportPreview.privacyWarning`) before export confirmation.
+- Export preview confirmation: `OpenPgpExportPreview.confirm(installation)` issuing `OpenPgpArtifacts` containing the transferable public key certificate, detached document signature, and optional cross-certification peer signatures.
+- Peer cross-certification: previewing export with optional `peerCertificate` and `peerUserId` issues 0x10 generic certification signatures bound to the peer's user ID.
+- Peer contact import: `importOpenPgpPeer` validating binding and expiration, importing public keys as unverified contacts (`VerificationStatus.importedUnverified`), and returning `OpenPgpProvenance` (primary and signing key fingerprints).
+- Owned secret key import & complete restoration: `importOpenPgpOwned` unlocking secret keys with passphrases, binding them to personas, and returning `OpenPgpOwnedImportResult` with the extracted 32-byte Ed25519 signing seed so installations can be fully restored from snapshots via `MeshInstallation.restore`.
+- Standalone secret seed recovery: `MeshInstallation.extractOpenPgpSecretSeed` unlocking retained OpenPGP secret certificates at app launch to recover persona seeds before restoration.
+- Secret zeroization: all temporary native buffers and Dart byte lists holding secret keys, passphrases, or intermediate seeds are zeroized in `finally` blocks on both success and error paths.
+- Document immutability & privacy: `OpenPgpExportPreview.document` returns an unmodifiable view (`asUnmodifiableView()`) preventing tampering with the previewed document, and preview constructors are library-private to keep raw native pointers out of the public surface.
+- Peer revocation import: `rememberOpenPgpRevocations` recording revocation certificates to prevent future imports or usage.
+- Strict session invalidation & error mapping: export preview handles are consumed on confirmation, reliably freed on error without memory leaks, expired on persona selection switch or node restart (`OpenPgpPreviewExpiredException`), and confirmation errors are mapped by cause (`OpenPgpKeyMismatchException`, `OpenPgpCertificateException`).
+- Pre-allocation defensive checks: certificates and revocations capped at 256 KiB, detached signing documents capped at 16 MiB, user IDs and passphrases capped at 2048 UTF-8 bytes, and timestamps validated between 1970 and 2106 before native memory allocation.
+- Added typed sealed exceptions: `OpenPgpCertificateException`, `OpenPgpInvalidBindingException`, `OpenPgpKeyMismatchException`, `OpenPgpSecretMaterialException`, `OpenPgpSecretMissingException`, `OpenPgpRevocationCapacityException`, and `OpenPgpPreviewExpiredException`.
+- Comprehensive test suite covering certificate inspection, v4/v6 export previews, unmodifiable documents, statutory warnings, cross-certification, peer and owned imports, snapshot restoration with recovered seeds, and bounds enforcement (69 tests).
+
 ## 0.4.0
 
 - Added Byzantine Group Admission & Governance protocol support (Slice 4).

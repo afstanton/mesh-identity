@@ -10,6 +10,7 @@ import 'mesh_identity_bindings.dart';
 import 'models.dart';
 
 part 'ceremony.dart';
+part 'openpgp_models.dart';
 
 /// The root controller for a local node's identities and contact relationships.
 ///
@@ -18,6 +19,18 @@ part 'ceremony.dart';
 class MeshInstallation implements ffi.Finalizable {
   /// Maximum number of signing key seeds allowed during restoration.
   static const int maxRestoreSeeds = 2048;
+
+  /// Maximum size of an OpenPGP certificate allowed by the bridge (256 KiB).
+  static const int maxOpenPgpCertificateBytes = 256 * 1024;
+
+  /// Maximum size of a document allowed for OpenPGP detached signing (16 MiB).
+  static const int maxOpenPgpDocumentBytes = 16 * 1024 * 1024;
+
+  /// Maximum length of an OpenPGP user ID in UTF-8 bytes (2048 bytes).
+  static const int maxOpenPgpUserIdBytes = 2048;
+
+  /// Maximum length of an OpenPGP passphrase in UTF-8 bytes (2048 bytes).
+  static const int maxOpenPgpPassphraseBytes = 2048;
 
   /// Generate a cryptographically secure 32-byte Ed25519 signing seed.
   ///
@@ -1111,6 +1124,455 @@ class MeshInstallation implements ffi.Finalizable {
       } finally {
         mesh_buffer_free(snapshotPtr, snapshotLen);
       }
+    });
+  }
+
+  /// Inspect an OpenPGP certificate or public key without importing it.
+  ///
+  /// Can be called on raw public key bytes or ASCII-armored data.
+  static OpenPgpCertificate inspectOpenPgpCertificate(Uint8List certificate) {
+    return OpenPgpCertificate.fromBytes(certificate);
+  }
+
+  /// Import an OpenPGP public key as an unverified peer contact.
+  ///
+  /// The [expectedPublicKey] must match the Ed25519 public key found in the
+  /// certificate (either as primary key or signing subkey). [userId] specifies
+  /// which user ID on the certificate to bind to the contact.
+  ///
+  /// Returns [OpenPgpProvenance] containing primary and signing fingerprints.
+  OpenPgpProvenance importOpenPgpPeer({
+    required Uint8List certificate,
+    required Uint8List expectedPublicKey,
+    required String userId,
+    DateTime? at,
+  }) {
+    _checkDisposed();
+    if (certificate.isEmpty ||
+        certificate.length > maxOpenPgpCertificateBytes) {
+      throw const InvalidArgumentsException(
+        'Certificate bytes must be non-empty and <= 256 KiB',
+      );
+    }
+    if (expectedPublicKey.length != 32) {
+      throw const InvalidArgumentsException(
+        'Expected public key must be exactly 32 bytes',
+      );
+    }
+    final uidBytes = utf8.encode(userId);
+    if (uidBytes.isEmpty || uidBytes.length > maxOpenPgpUserIdBytes) {
+      throw const InvalidArgumentsException(
+        'User ID must be non-empty and <= 2048 UTF-8 bytes',
+      );
+    }
+    final timestampSecs = (at ?? DateTime.now()).millisecondsSinceEpoch ~/ 1000;
+    if (timestampSecs < 0 || timestampSecs > 0xFFFFFFFF) {
+      throw const InvalidArgumentsException(
+        'Timestamp must be between 1970 and 2106 (32-bit unsigned seconds)',
+      );
+    }
+
+    return using((Arena arena) {
+      final certPtr = arena<ffi.Uint8>(certificate.length);
+      certPtr.asTypedList(certificate.length).setAll(0, certificate);
+
+      final expectedPkPtr = arena<ffi.Uint8>(32);
+      expectedPkPtr.asTypedList(32).setAll(0, expectedPublicKey);
+
+      final uidPtr = arena<ffi.Uint8>(uidBytes.length);
+      uidPtr.asTypedList(uidBytes.length).setAll(0, uidBytes);
+
+      final outProvenance = arena<ffi.Pointer<ffi.Char>>();
+
+      final res = mesh_installation_openpgp_import_peer(
+        _handle,
+        certPtr,
+        certificate.length,
+        expectedPkPtr,
+        32,
+        uidPtr,
+        uidBytes.length,
+        timestampSecs,
+        outProvenance,
+      );
+      _checkResult(res, 'Failed to import OpenPGP peer');
+
+      final provPtr = outProvenance.value;
+      try {
+        final jsonStr = provPtr.cast<Utf8>().toDartString();
+        final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+        return OpenPgpProvenance.fromJson(map);
+      } finally {
+        mesh_string_free(provPtr);
+      }
+    });
+  }
+
+  /// Import an owned OpenPGP secret key certificate, binding it to an owned persona.
+  ///
+  /// The [expectedPublicKey] must match the Ed25519 public key found in the
+  /// secret key certificate. If the secret key is passphrase-protected, provide
+  /// [passphrase].
+  ///
+  /// Returns [OpenPgpOwnedImportResult] containing [OpenPgpProvenance] and the
+  /// extracted 32-byte Ed25519 signing seed. The caller should retain this seed
+  /// in secure storage (along with other seeds) so that the installation can be
+  /// restored from snapshots via [MeshInstallation.restore].
+  OpenPgpOwnedImportResult importOpenPgpOwned({
+    required Uint8List secretKeyCertificate,
+    required Uint8List expectedPublicKey,
+    required String userId,
+    String? passphrase,
+    DateTime? at,
+  }) {
+    _checkDisposed();
+    if (secretKeyCertificate.isEmpty ||
+        secretKeyCertificate.length > maxOpenPgpCertificateBytes) {
+      throw const InvalidArgumentsException(
+        'Secret key certificate bytes must be non-empty and <= 256 KiB',
+      );
+    }
+    if (expectedPublicKey.length != 32) {
+      throw const InvalidArgumentsException(
+        'Expected public key must be exactly 32 bytes',
+      );
+    }
+    final uidBytes = utf8.encode(userId);
+    if (uidBytes.isEmpty || uidBytes.length > maxOpenPgpUserIdBytes) {
+      throw const InvalidArgumentsException(
+        'User ID must be non-empty and <= 2048 UTF-8 bytes',
+      );
+    }
+    final timestampSecs = (at ?? DateTime.now()).millisecondsSinceEpoch ~/ 1000;
+    if (timestampSecs < 0 || timestampSecs > 0xFFFFFFFF) {
+      throw const InvalidArgumentsException(
+        'Timestamp must be between 1970 and 2106 (32-bit unsigned seconds)',
+      );
+    }
+
+    Uint8List? passBytes;
+    if (passphrase != null) {
+      passBytes = Uint8List.fromList(utf8.encode(passphrase));
+      if (passBytes.length > maxOpenPgpPassphraseBytes) {
+        passBytes.fillRange(0, passBytes.length, 0);
+        throw const InvalidArgumentsException(
+          'Passphrase must be <= 2048 UTF-8 bytes',
+        );
+      }
+    }
+
+    return using((Arena arena) {
+      final certPtr = arena<ffi.Uint8>(secretKeyCertificate.length);
+      certPtr
+          .asTypedList(secretKeyCertificate.length)
+          .setAll(0, secretKeyCertificate);
+
+      final expectedPkPtr = arena<ffi.Uint8>(32);
+      expectedPkPtr.asTypedList(32).setAll(0, expectedPublicKey);
+
+      final uidPtr = arena<ffi.Uint8>(uidBytes.length);
+      uidPtr.asTypedList(uidBytes.length).setAll(0, uidBytes);
+
+      ffi.Pointer<ffi.Uint8> passPtr = ffi.nullptr;
+      var passLen = 0;
+      if (passBytes != null) {
+        passLen = passBytes.length;
+        passPtr = arena<ffi.Uint8>(passLen);
+        passPtr.asTypedList(passLen).setAll(0, passBytes);
+      }
+
+      final outProvenance = arena<ffi.Pointer<ffi.Char>>();
+      final outSeed = arena<ffi.Uint8>(32);
+
+      try {
+        final res = mesh_installation_openpgp_import_owned(
+          _handle,
+          certPtr,
+          secretKeyCertificate.length,
+          expectedPkPtr,
+          32,
+          uidPtr,
+          uidBytes.length,
+          timestampSecs,
+          passPtr,
+          passLen,
+          outProvenance,
+          outSeed,
+        );
+        _checkResult(res, 'Failed to import owned OpenPGP key');
+
+        final provPtr = outProvenance.value;
+        try {
+          final jsonStr = provPtr.cast<Utf8>().toDartString();
+          final map = jsonDecode(jsonStr) as Map<String, dynamic>;
+          final provenance = OpenPgpProvenance.fromJson(map);
+          final seed = Uint8List.fromList(outSeed.asTypedList(32));
+          return OpenPgpOwnedImportResult(provenance: provenance, seed: seed);
+        } finally {
+          mesh_string_free(provPtr);
+        }
+      } finally {
+        // Zeroize all temporary secret buffers on both success and error paths
+        certPtr
+            .asTypedList(secretKeyCertificate.length)
+            .fillRange(0, secretKeyCertificate.length, 0);
+        if (passPtr != ffi.nullptr && passLen > 0) {
+          passPtr.asTypedList(passLen).fillRange(0, passLen, 0);
+        }
+        if (passBytes != null) {
+          passBytes.fillRange(0, passBytes.length, 0);
+        }
+        outSeed.asTypedList(32).fillRange(0, 32, 0);
+      }
+    });
+  }
+
+  /// Standalone extraction of the 32-byte Ed25519 signing seed from an OpenPGP secret key certificate.
+  ///
+  /// Can be used at application launch to recover persona seeds from retained
+  /// secret key certificates before restoring the installation via [MeshInstallation.restore].
+  static Uint8List extractOpenPgpSecretSeed({
+    required Uint8List secretKeyCertificate,
+    required Uint8List expectedPublicKey,
+    required String userId,
+    String? passphrase,
+    DateTime? at,
+  }) {
+    if (secretKeyCertificate.isEmpty ||
+        secretKeyCertificate.length > maxOpenPgpCertificateBytes) {
+      throw const InvalidArgumentsException(
+        'Secret key certificate bytes must be non-empty and <= 256 KiB',
+      );
+    }
+    if (expectedPublicKey.length != 32) {
+      throw const InvalidArgumentsException(
+        'Expected public key must be exactly 32 bytes',
+      );
+    }
+    final uidBytes = utf8.encode(userId);
+    if (uidBytes.isEmpty || uidBytes.length > maxOpenPgpUserIdBytes) {
+      throw const InvalidArgumentsException(
+        'User ID must be non-empty and <= 2048 UTF-8 bytes',
+      );
+    }
+    final timestampSecs = (at ?? DateTime.now()).millisecondsSinceEpoch ~/ 1000;
+    if (timestampSecs < 0 || timestampSecs > 0xFFFFFFFF) {
+      throw const InvalidArgumentsException(
+        'Timestamp must be between 1970 and 2106 (32-bit unsigned seconds)',
+      );
+    }
+
+    Uint8List? passBytes;
+    if (passphrase != null) {
+      passBytes = Uint8List.fromList(utf8.encode(passphrase));
+      if (passBytes.length > maxOpenPgpPassphraseBytes) {
+        passBytes.fillRange(0, passBytes.length, 0);
+        throw const InvalidArgumentsException(
+          'Passphrase must be <= 2048 UTF-8 bytes',
+        );
+      }
+    }
+
+    return using((Arena arena) {
+      final certPtr = arena<ffi.Uint8>(secretKeyCertificate.length);
+      certPtr
+          .asTypedList(secretKeyCertificate.length)
+          .setAll(0, secretKeyCertificate);
+
+      final expectedPkPtr = arena<ffi.Uint8>(32);
+      expectedPkPtr.asTypedList(32).setAll(0, expectedPublicKey);
+
+      final uidPtr = arena<ffi.Uint8>(uidBytes.length);
+      uidPtr.asTypedList(uidBytes.length).setAll(0, uidBytes);
+
+      ffi.Pointer<ffi.Uint8> passPtr = ffi.nullptr;
+      var passLen = 0;
+      if (passBytes != null) {
+        passLen = passBytes.length;
+        passPtr = arena<ffi.Uint8>(passLen);
+        passPtr.asTypedList(passLen).setAll(0, passBytes);
+      }
+
+      final outSeed = arena<ffi.Uint8>(32);
+
+      try {
+        final res = mesh_openpgp_extract_secret_seed(
+          certPtr,
+          secretKeyCertificate.length,
+          expectedPkPtr,
+          32,
+          uidPtr,
+          uidBytes.length,
+          timestampSecs,
+          passPtr,
+          passLen,
+          outSeed,
+        );
+        MeshIdentityBindings.checkResult(
+          res,
+          'Failed to extract OpenPGP secret seed',
+        );
+        return Uint8List.fromList(outSeed.asTypedList(32));
+      } finally {
+        // Zeroize all temporary secret buffers on both success and error paths
+        certPtr
+            .asTypedList(secretKeyCertificate.length)
+            .fillRange(0, secretKeyCertificate.length, 0);
+        if (passPtr != ffi.nullptr && passLen > 0) {
+          passPtr.asTypedList(passLen).fillRange(0, passLen, 0);
+        }
+        if (passBytes != null) {
+          passBytes.fillRange(0, passBytes.length, 0);
+        }
+        outSeed.asTypedList(32).fillRange(0, 32, 0);
+      }
+    });
+  }
+
+  /// Create an OpenPGP export preview for the currently selected persona.
+  ///
+  /// CRITICAL: The returned [OpenPgpExportPreview] contains [OpenPgpExportPreview.privacyWarning]
+  /// which MUST be presented to the user before calling [OpenPgpExportPreview.confirm].
+  ///
+  /// If [peerCertificate] and [peerUserId] are provided, the preview prepares
+  /// peer cross-certification signatures in addition to the self-certificate and
+  /// detached document signature.
+  OpenPgpExportPreview createOpenPgpPreview({
+    required OpenPgpProfile profile,
+    required String userId,
+    required Uint8List document,
+    Uint8List? peerCertificate,
+    String? peerUserId,
+    DateTime? at,
+  }) {
+    _checkDisposed();
+    if (document.length > maxOpenPgpDocumentBytes) {
+      throw const InvalidArgumentsException('Document size must be <= 16 MiB');
+    }
+    final uidBytes = utf8.encode(userId);
+    if (uidBytes.isEmpty || uidBytes.length > maxOpenPgpUserIdBytes) {
+      throw const InvalidArgumentsException(
+        'User ID must be non-empty and <= 2048 UTF-8 bytes',
+      );
+    }
+    if (peerCertificate != null &&
+        (peerCertificate.isEmpty ||
+            peerCertificate.length > maxOpenPgpCertificateBytes)) {
+      throw const InvalidArgumentsException(
+        'Peer certificate bytes must be <= 256 KiB',
+      );
+    }
+    Uint8List? peerUidBytes;
+    if (peerUserId != null) {
+      peerUidBytes = Uint8List.fromList(utf8.encode(peerUserId));
+      if (peerUidBytes.isEmpty || peerUidBytes.length > maxOpenPgpUserIdBytes) {
+        throw const InvalidArgumentsException(
+          'Peer User ID must be non-empty and <= 2048 UTF-8 bytes',
+        );
+      }
+    }
+    final createdSecs = (at ?? DateTime.now()).millisecondsSinceEpoch ~/ 1000;
+    if (createdSecs < 0 || createdSecs > 0xFFFFFFFF) {
+      throw const InvalidArgumentsException(
+        'Timestamp must be between 1970 and 2106 (32-bit unsigned seconds)',
+      );
+    }
+
+    return using((Arena arena) {
+      final uidPtr = arena<ffi.Uint8>(uidBytes.length);
+      uidPtr.asTypedList(uidBytes.length).setAll(0, uidBytes);
+
+      final docPtr = arena<ffi.Uint8>(document.length);
+      docPtr.asTypedList(document.length).setAll(0, document);
+
+      ffi.Pointer<ffi.Uint8> peerCertPtr = ffi.nullptr;
+      var peerCertLen = 0;
+      if (peerCertificate != null) {
+        peerCertLen = peerCertificate.length;
+        peerCertPtr = arena<ffi.Uint8>(peerCertLen);
+        peerCertPtr.asTypedList(peerCertLen).setAll(0, peerCertificate);
+      }
+
+      ffi.Pointer<ffi.Uint8> peerUidPtr = ffi.nullptr;
+      var peerUidLen = 0;
+      if (peerUidBytes != null) {
+        peerUidLen = peerUidBytes.length;
+        peerUidPtr = arena<ffi.Uint8>(peerUidLen);
+        peerUidPtr.asTypedList(peerUidLen).setAll(0, peerUidBytes);
+      }
+
+      final outPreview = arena<ffi.Pointer<ffi.Void>>();
+      final outWarning = arena<ffi.Pointer<ffi.Char>>();
+      final outPeerFp = arena<ffi.Pointer<ffi.Char>>();
+
+      final res = mesh_installation_openpgp_preview(
+        _handle,
+        profile.value,
+        uidPtr,
+        uidBytes.length,
+        createdSecs,
+        docPtr,
+        document.length,
+        peerCertPtr,
+        peerCertLen,
+        peerUidPtr,
+        peerUidLen,
+        outPreview,
+        outWarning,
+        outPeerFp,
+      );
+      _checkResult(res, 'Failed to create OpenPGP export preview');
+
+      final warningPtr = outWarning.value;
+      final peerFpPtr = outPeerFp.value;
+      try {
+        final warningStr = warningPtr.cast<Utf8>().toDartString();
+        String? peerFpStr;
+        if (peerFpPtr != ffi.nullptr) {
+          peerFpStr = peerFpPtr.cast<Utf8>().toDartString();
+        }
+
+        return OpenPgpExportPreview._(
+          handle: outPreview.value,
+          userId: userId,
+          createdSeconds: createdSecs,
+          profile: profile,
+          document: document,
+          peerCertificationFingerprint: peerFpStr,
+          peerCertificationUserId: peerUserId,
+          warning: warningStr,
+        );
+      } finally {
+        if (warningPtr != ffi.nullptr) {
+          mesh_string_free(warningPtr);
+        }
+        if (peerFpPtr != ffi.nullptr) {
+          mesh_string_free(peerFpPtr);
+        }
+      }
+    });
+  }
+
+  /// Store peer revocation certificates to prevent future imports or usage.
+  void rememberOpenPgpRevocations(Uint8List revocationBytes) {
+    _checkDisposed();
+    if (revocationBytes.isEmpty ||
+        revocationBytes.length > maxOpenPgpCertificateBytes) {
+      throw const InvalidArgumentsException(
+        'Revocation bytes must be non-empty and <= 256 KiB',
+      );
+    }
+
+    using((Arena arena) {
+      final revPtr = arena<ffi.Uint8>(revocationBytes.length);
+      revPtr.asTypedList(revocationBytes.length).setAll(0, revocationBytes);
+
+      final res = mesh_installation_openpgp_remember_revocations(
+        _handle,
+        revPtr,
+        revocationBytes.length,
+      );
+      _checkResult(res, 'Failed to remember OpenPGP revocations');
     });
   }
 }

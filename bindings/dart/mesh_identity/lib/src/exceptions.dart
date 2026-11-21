@@ -149,3 +149,38 @@ final class GroupTooLargeException extends MeshIdentityException {
 final class MalformedGroupException extends MeshIdentityException {
   const MalformedGroupException(super.message);
 }
+
+/// Thrown when an OpenPGP certificate is malformed or invalid syntax.
+final class OpenPgpCertificateException extends MeshIdentityException {
+  const OpenPgpCertificateException(super.message);
+}
+
+/// Thrown when an OpenPGP user ID or certification binding is invalid, expired, or unverified.
+final class OpenPgpInvalidBindingException extends MeshIdentityException {
+  const OpenPgpInvalidBindingException(super.message);
+}
+
+/// Thrown when an expected public key does not match an OpenPGP certificate's primary key or subkeys.
+final class OpenPgpKeyMismatchException extends MeshIdentityException {
+  const OpenPgpKeyMismatchException(super.message);
+}
+
+/// Thrown when secret/private key material is encountered where only public certificate bytes were expected.
+final class OpenPgpSecretMaterialException extends MeshIdentityException {
+  const OpenPgpSecretMaterialException(super.message);
+}
+
+/// Thrown when secret key material is missing or wrong passphrase is provided.
+final class OpenPgpSecretMissingException extends MeshIdentityException {
+  const OpenPgpSecretMissingException(super.message);
+}
+
+/// Thrown when revocation signatures exceed the maximum capacity or budget.
+final class OpenPgpRevocationCapacityException extends MeshIdentityException {
+  const OpenPgpRevocationCapacityException(super.message);
+}
+
+/// Thrown when an OpenPGP export preview has expired, been superseded, or the selected identity was switched.
+final class OpenPgpPreviewExpiredException extends MeshIdentityException {
+  const OpenPgpPreviewExpiredException(super.message);
+}

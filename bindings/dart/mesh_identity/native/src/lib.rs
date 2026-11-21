@@ -2,6 +2,7 @@ use ed25519_dalek::SigningKey;
 use mesh_identity::contact::{ContactStatus, VerificationStatus};
 use mesh_identity::session::Comparison;
 use mesh_identity::session::installation::{Ceremony, Installation};
+use pgp::types::KeyDetails;
 use rand::rngs::OsRng;
 use serde::Serialize;
 use std::cell::RefCell;
@@ -9,6 +10,7 @@ use std::ffi::CString;
 use std::os::raw::c_char;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::slice;
+use std::time::{Duration, SystemTime};
 use zeroize::Zeroize;
 
 pub const MESH_OK: i32 = 0;
@@ -40,12 +42,25 @@ pub const MESH_ERR_TOO_LARGE: i32 = -25;
 pub const MESH_ERR_MALFORMED: i32 = -26;
 pub const MESH_ERR_FORMATION: i32 = -27;
 
+// OpenPGP error codes
+pub const MESH_ERR_OPENPGP_CERTIFICATE: i32 = -3001;
+pub const MESH_ERR_OPENPGP_INVALID_BINDING: i32 = -3002;
+pub const MESH_ERR_OPENPGP_KEY_MISMATCH: i32 = -3003;
+pub const MESH_ERR_OPENPGP_SECRET_MATERIAL: i32 = -3004;
+pub const MESH_ERR_OPENPGP_SECRET_MISSING: i32 = -3005;
+pub const MESH_ERR_OPENPGP_REVOCATION_CAPACITY: i32 = -3006;
+pub const MESH_ERR_OPENPGP_PREVIEW_EXPIRED: i32 = -3007;
+
 const MAX_SEEDS_CEILING: usize = 2048;
 const MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024; // 64 MiB
 const MAX_HANDOFF_BUNDLE_BYTES: usize = 5 * 1024 * 1024; // 5 MiB
 const MAX_GROUP_FRAME_BYTES: usize = 128 * 1024; // 128 KiB (matching core MAX_FRAME_BYTES)
 const MAX_GROUP_SNAPSHOT_BYTES: usize = 256 * 1024 * 1024; // 256 MiB (matching core MAX_HANDLE_BYTES)
 const MAX_GROUP_MEMBERS: usize = 192; // matching core MAX_MEMBERS
+const MAX_OPENPGP_CERTIFICATE_BYTES: usize = 256 * 1024; // 256 KiB
+const MAX_OPENPGP_DOCUMENT_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
+const MAX_OPENPGP_USER_ID_BYTES: usize = 2048;
+const MAX_OPENPGP_PASSPHRASE_BYTES: usize = 2048;
 
 thread_local! {
     static LAST_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -3404,6 +3419,804 @@ pub unsafe extern "C" fn mesh_group_handle_restore(
     }));
     result.unwrap_or_else(|_| {
         set_last_error("native panic caught at FFI boundary");
+        MESH_ERR_PANIC
+    })
+}
+
+// ============================================================================
+// OpenPGP Interoperability Bridge (Slice 5)
+// ============================================================================
+
+fn map_import_error(err: &mesh_identity::openpgp::ImportError) -> i32 {
+    use mesh_identity::openpgp::ImportError::*;
+    match err {
+        Certificate(_) => MESH_ERR_OPENPGP_CERTIFICATE,
+        InvalidBinding => MESH_ERR_OPENPGP_INVALID_BINDING,
+        KeyMismatch => MESH_ERR_OPENPGP_KEY_MISMATCH,
+        SecretMaterial => MESH_ERR_OPENPGP_SECRET_MATERIAL,
+        SecretMissing | UnlockFailed | InvalidSecret => MESH_ERR_OPENPGP_SECRET_MISSING,
+        Contact(e) => map_installation_error(e),
+        RevocationCapacity => MESH_ERR_OPENPGP_REVOCATION_CAPACITY,
+    }
+}
+
+fn extract_public_key_bytes(pub_params: &pgp::types::PublicParams) -> Option<&[u8]> {
+    match pub_params {
+        pgp::types::PublicParams::EdDSALegacy(pgp::types::EddsaLegacyPublicParams::Ed25519 {
+            key,
+        }) => Some(key.as_bytes()),
+        pgp::types::PublicParams::Ed25519(pgp::types::Ed25519PublicParams { key }) => {
+            Some(key.as_bytes())
+        }
+        _ => None,
+    }
+}
+
+fn algorithm_to_str(algo: pgp::crypto::public_key::PublicKeyAlgorithm) -> &'static str {
+    match algo {
+        pgp::crypto::public_key::PublicKeyAlgorithm::EdDSALegacy => "EdDSALegacy",
+        pgp::crypto::public_key::PublicKeyAlgorithm::Ed25519 => "Ed25519",
+        pgp::crypto::public_key::PublicKeyAlgorithm::RSA => "RSA",
+        pgp::crypto::public_key::PublicKeyAlgorithm::DSA => "DSA",
+        pgp::crypto::public_key::PublicKeyAlgorithm::ECDSA => "ECDSA",
+        pgp::crypto::public_key::PublicKeyAlgorithm::ECDH => "ECDH",
+        _ => "Unknown",
+    }
+}
+
+#[derive(Serialize)]
+struct OpenPgpSubkeyJson {
+    fingerprint: String,
+    algorithm: String,
+    key_bytes: String,
+}
+
+#[derive(Serialize)]
+struct OpenPgpCertificateJson {
+    fingerprint: String,
+    version: i32,
+    algorithm: String,
+    primary_key_bytes: String,
+    user_ids: Vec<String>,
+    subkeys: Vec<OpenPgpSubkeyJson>,
+}
+
+#[derive(Serialize)]
+struct OpenPgpProvenanceJson {
+    primary_fingerprint: String,
+    signing_key_fingerprint: String,
+    user_id: String,
+}
+
+#[derive(Serialize)]
+struct PeerSignatureJson {
+    label: String,
+    signature_hex: String,
+}
+
+/// Opaque wrapper for a pending OpenPGP export preview.
+pub struct MeshOpenPgpPreviewHandle {
+    pub preview: Option<mesh_identity::openpgp::ExportPreview>,
+}
+
+/// Parse and inspect an OpenPGP public key or certificate.
+///
+/// Returns a JSON string describing the certificate metadata in `*out_json`.
+/// The returned string must be freed with `mesh_string_free`.
+///
+/// # Safety
+///
+/// - `cert_ptr` must point to `cert_len` readable bytes.
+/// - `out_json` must be a valid, writable pointer to `*mut c_char`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_openpgp_inspect_certificate(
+    cert_ptr: *const u8,
+    cert_len: usize,
+    out_json: *mut *mut c_char,
+) -> i32 {
+    clear_last_error();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if cert_ptr.is_null()
+            || cert_len == 0
+            || cert_len > MAX_OPENPGP_CERTIFICATE_BYTES
+            || out_json.is_null()
+        {
+            set_last_error("invalid arguments passed to mesh_openpgp_inspect_certificate");
+            return MESH_ERR_INVALID_ARG;
+        }
+
+        let cert_bytes = unsafe { slice::from_raw_parts(cert_ptr, cert_len) };
+        let cert = match mesh_identity::openpgp::parse_public_peer(cert_bytes) {
+            Ok(c) => c,
+            Err(e) => {
+                set_last_error(format!("{e}"));
+                return map_import_error(&e);
+            }
+        };
+
+        let version = match cert.primary_key.version() {
+            pgp::types::KeyVersion::V2 => 2,
+            pgp::types::KeyVersion::V3 => 3,
+            pgp::types::KeyVersion::V4 => 4,
+            pgp::types::KeyVersion::V5 => 5,
+            pgp::types::KeyVersion::V6 => 6,
+            pgp::types::KeyVersion::Other(v) => i32::from(v),
+        };
+        let algorithm = algorithm_to_str(cert.primary_key.algorithm()).to_string();
+        let primary_key_bytes = extract_public_key_bytes(cert.primary_key.public_params())
+            .map(hex::encode)
+            .unwrap_or_default();
+        let user_ids: Vec<String> = cert
+            .details
+            .users
+            .iter()
+            .map(|u| String::from_utf8_lossy(u.id.id()).into_owned())
+            .collect();
+        let subkeys: Vec<OpenPgpSubkeyJson> = cert
+            .public_subkeys
+            .iter()
+            .map(|sub| {
+                let key_bytes = extract_public_key_bytes(sub.key.public_params())
+                    .map(hex::encode)
+                    .unwrap_or_default();
+                OpenPgpSubkeyJson {
+                    fingerprint: hex::encode(sub.key.fingerprint().as_bytes()),
+                    algorithm: algorithm_to_str(sub.key.algorithm()).to_string(),
+                    key_bytes,
+                }
+            })
+            .collect();
+
+        let json_struct = OpenPgpCertificateJson {
+            fingerprint: hex::encode(cert.primary_key.fingerprint().as_bytes()),
+            version,
+            algorithm,
+            primary_key_bytes,
+            user_ids,
+            subkeys,
+        };
+
+        let s = match serde_json::to_string(&json_struct) {
+            Ok(s) => s,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+
+        let cstr = match CString::new(s) {
+            Ok(c) => c,
+            Err(_) => {
+                set_last_error("failed to create CString from certificate inspection JSON");
+                return MESH_ERR_INTERNAL;
+            }
+        };
+
+        unsafe {
+            *out_json = cstr.into_raw();
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        set_last_error("native panic caught at FFI boundary");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Import an OpenPGP peer certificate into this installation as an unverified contact.
+///
+/// Returns the provenance metadata JSON in `*out_provenance_json`.
+/// Must be freed with `mesh_string_free`.
+///
+/// # Safety
+///
+/// - `handle` must be a valid pointer to a `MeshInstallationHandle`.
+/// - `cert_ptr`, `expected_pk_ptr`, `uid_ptr`, and `out_provenance_json` must be valid non-null pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_installation_openpgp_import_peer(
+    handle: *mut MeshInstallationHandle,
+    cert_ptr: *const u8,
+    cert_len: usize,
+    expected_pk_ptr: *const u8,
+    expected_pk_len: usize,
+    uid_ptr: *const u8,
+    uid_len: usize,
+    timestamp_secs: u64,
+    out_provenance_json: *mut *mut c_char,
+) -> i32 {
+    let handle_ptr = handle;
+    clear_last_error();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null()
+            || cert_ptr.is_null()
+            || cert_len == 0
+            || cert_len > MAX_OPENPGP_CERTIFICATE_BYTES
+            || expected_pk_ptr.is_null()
+            || expected_pk_len != 32
+            || uid_ptr.is_null()
+            || uid_len == 0
+            || uid_len > MAX_OPENPGP_USER_ID_BYTES
+            || out_provenance_json.is_null()
+        {
+            set_last_error("invalid arguments passed to mesh_installation_openpgp_import_peer");
+            return MESH_ERR_INVALID_ARG;
+        }
+
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("installation handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+
+        let cert = unsafe { slice::from_raw_parts(cert_ptr, cert_len) };
+        let mut expected = [0u8; 32];
+        unsafe {
+            std::ptr::copy_nonoverlapping(expected_pk_ptr, expected.as_mut_ptr(), 32);
+        }
+        let uid = unsafe { slice::from_raw_parts(uid_ptr, uid_len) };
+        let time = SystemTime::UNIX_EPOCH + Duration::from_secs(timestamp_secs);
+
+        let (_record, provenance) = match mesh_identity::openpgp::import_peer(
+            &mut handle.installation,
+            cert,
+            expected,
+            uid,
+            time,
+            &mut OsRng,
+        ) {
+            Ok(res) => res,
+            Err(e) => {
+                set_last_error(format!("{e}"));
+                return map_import_error(&e);
+            }
+        };
+
+        let prov_struct = OpenPgpProvenanceJson {
+            primary_fingerprint: hex::encode(provenance.primary.as_bytes()),
+            signing_key_fingerprint: hex::encode(provenance.signing_key.as_bytes()),
+            user_id: String::from_utf8_lossy(&provenance.user_id).into_owned(),
+        };
+
+        let s = match serde_json::to_string(&prov_struct) {
+            Ok(s) => s,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+
+        let cstr = match CString::new(s) {
+            Ok(c) => c,
+            Err(_) => {
+                set_last_error("failed to create CString from provenance JSON");
+                return MESH_ERR_INTERNAL;
+            }
+        };
+
+        unsafe {
+            *out_provenance_json = cstr.into_raw();
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Import an OpenPGP secret key as an owned identity in this installation.
+///
+/// Returns provenance metadata JSON in `*out_provenance_json`.
+/// Must be freed with `mesh_string_free`.
+///
+/// # Safety
+///
+/// - `handle` must be a valid pointer to a `MeshInstallationHandle`.
+/// - `cert_ptr`, `expected_pk_ptr`, `uid_ptr`, `out_provenance_json`, and `out_seed` must be valid non-null pointers.
+/// - `out_seed` must point to at least 32 writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_installation_openpgp_import_owned(
+    handle: *mut MeshInstallationHandle,
+    cert_ptr: *const u8,
+    cert_len: usize,
+    expected_pk_ptr: *const u8,
+    expected_pk_len: usize,
+    uid_ptr: *const u8,
+    uid_len: usize,
+    timestamp_secs: u64,
+    passphrase_ptr: *const u8,
+    passphrase_len: usize,
+    out_provenance_json: *mut *mut c_char,
+    out_seed: *mut u8,
+) -> i32 {
+    let handle_ptr = handle;
+    clear_last_error();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null()
+            || cert_ptr.is_null()
+            || cert_len == 0
+            || cert_len > MAX_OPENPGP_CERTIFICATE_BYTES
+            || expected_pk_ptr.is_null()
+            || expected_pk_len != 32
+            || uid_ptr.is_null()
+            || uid_len == 0
+            || uid_len > MAX_OPENPGP_USER_ID_BYTES
+            || passphrase_len > MAX_OPENPGP_PASSPHRASE_BYTES
+            || out_provenance_json.is_null()
+            || out_seed.is_null()
+        {
+            set_last_error("invalid arguments passed to mesh_installation_openpgp_import_owned");
+            return MESH_ERR_INVALID_ARG;
+        }
+
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("installation handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+
+        let cert = unsafe { slice::from_raw_parts(cert_ptr, cert_len) };
+        let mut expected = [0u8; 32];
+        unsafe {
+            std::ptr::copy_nonoverlapping(expected_pk_ptr, expected.as_mut_ptr(), 32);
+        }
+        let uid = unsafe { slice::from_raw_parts(uid_ptr, uid_len) };
+        let passphrase = if passphrase_ptr.is_null() || passphrase_len == 0 {
+            &[][..]
+        } else {
+            unsafe { slice::from_raw_parts(passphrase_ptr, passphrase_len) }
+        };
+        let time = SystemTime::UNIX_EPOCH + Duration::from_secs(timestamp_secs);
+
+        let (mut seed, provenance) = match mesh_identity::openpgp::import_owned_with_seed(
+            &mut handle.installation,
+            cert,
+            expected,
+            uid,
+            time,
+            passphrase,
+        ) {
+            Ok(res) => res,
+            Err(e) => {
+                set_last_error(format!("{e}"));
+                return map_import_error(&e);
+            }
+        };
+
+        unsafe {
+            std::ptr::copy_nonoverlapping(seed.as_ptr(), out_seed, 32);
+        }
+        seed.fill(0);
+
+        let prov_struct = OpenPgpProvenanceJson {
+            primary_fingerprint: hex::encode(provenance.primary.as_bytes()),
+            signing_key_fingerprint: hex::encode(provenance.signing_key.as_bytes()),
+            user_id: String::from_utf8_lossy(&provenance.user_id).into_owned(),
+        };
+
+        let s = match serde_json::to_string(&prov_struct) {
+            Ok(s) => s,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+
+        let cstr = match CString::new(s) {
+            Ok(c) => c,
+            Err(_) => {
+                set_last_error("failed to create CString from provenance JSON");
+                return MESH_ERR_INTERNAL;
+            }
+        };
+
+        unsafe {
+            *out_provenance_json = cstr.into_raw();
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Standalone extraction of the 32-byte Ed25519 signing seed from an OpenPGP secret key certificate.
+///
+/// Copies exactly 32 bytes into `out_seed`.
+///
+/// # Safety
+///
+/// - `cert_ptr`, `expected_pk_ptr`, `uid_ptr`, and `out_seed` must be valid non-null pointers.
+/// - `out_seed` must point to at least 32 writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_openpgp_extract_secret_seed(
+    cert_ptr: *const u8,
+    cert_len: usize,
+    expected_pk_ptr: *const u8,
+    expected_pk_len: usize,
+    uid_ptr: *const u8,
+    uid_len: usize,
+    timestamp_secs: u64,
+    passphrase_ptr: *const u8,
+    passphrase_len: usize,
+    out_seed: *mut u8,
+) -> i32 {
+    clear_last_error();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if cert_ptr.is_null()
+            || cert_len == 0
+            || cert_len > MAX_OPENPGP_CERTIFICATE_BYTES
+            || expected_pk_ptr.is_null()
+            || expected_pk_len != 32
+            || uid_ptr.is_null()
+            || uid_len == 0
+            || uid_len > MAX_OPENPGP_USER_ID_BYTES
+            || passphrase_len > MAX_OPENPGP_PASSPHRASE_BYTES
+            || out_seed.is_null()
+        {
+            set_last_error("invalid arguments passed to mesh_openpgp_extract_secret_seed");
+            return MESH_ERR_INVALID_ARG;
+        }
+
+        let cert = unsafe { slice::from_raw_parts(cert_ptr, cert_len) };
+        let mut expected = [0u8; 32];
+        unsafe {
+            std::ptr::copy_nonoverlapping(expected_pk_ptr, expected.as_mut_ptr(), 32);
+        }
+        let uid = unsafe { slice::from_raw_parts(uid_ptr, uid_len) };
+        let passphrase = if passphrase_ptr.is_null() || passphrase_len == 0 {
+            &[][..]
+        } else {
+            unsafe { slice::from_raw_parts(passphrase_ptr, passphrase_len) }
+        };
+        let time = SystemTime::UNIX_EPOCH + Duration::from_secs(timestamp_secs);
+
+        let mut seed = match mesh_identity::openpgp::extract_secret_seed(
+            cert, expected, uid, time, passphrase,
+        ) {
+            Ok(s) => s,
+            Err(e) => {
+                set_last_error(format!("{e}"));
+                return map_import_error(&e);
+            }
+        };
+
+        unsafe {
+            std::ptr::copy_nonoverlapping(seed.as_ptr(), out_seed, 32);
+        }
+        seed.fill(0);
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        set_last_error("native panic caught at FFI boundary in mesh_openpgp_extract_secret_seed");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Create an OpenPGP export preview session awaiting user confirmation.
+///
+/// Returns an allocated `MeshOpenPgpPreviewHandle` in `*out_preview`, statutory warning string
+/// in `*out_warning` (must be freed with `mesh_string_free`), and optional peer fingerprint string in `*out_peer_fp`.
+///
+/// # Safety
+///
+/// - `handle` must be a valid pointer to a `MeshInstallationHandle`.
+/// - `uid_ptr`, `doc_ptr`, `out_preview`, and `out_warning` must be valid non-null pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_installation_openpgp_preview(
+    handle: *mut MeshInstallationHandle,
+    profile_i32: i32,
+    uid_ptr: *const u8,
+    uid_len: usize,
+    created_secs: u32,
+    doc_ptr: *const u8,
+    doc_len: usize,
+    peer_cert_ptr: *const u8,
+    peer_cert_len: usize,
+    peer_uid_ptr: *const u8,
+    peer_uid_len: usize,
+    out_preview: *mut *mut MeshOpenPgpPreviewHandle,
+    out_warning: *mut *mut c_char,
+    out_peer_fp: *mut *mut c_char,
+) -> i32 {
+    let handle_ptr = handle;
+    clear_last_error();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null()
+            || uid_ptr.is_null()
+            || uid_len == 0
+            || uid_len > MAX_OPENPGP_USER_ID_BYTES
+            || doc_ptr.is_null()
+            || doc_len > MAX_OPENPGP_DOCUMENT_BYTES
+            || out_preview.is_null()
+            || out_warning.is_null()
+            || out_peer_fp.is_null()
+        {
+            set_last_error("invalid arguments passed to mesh_installation_openpgp_preview");
+            return MESH_ERR_INVALID_ARG;
+        }
+
+        let profile = match profile_i32 {
+            0 => mesh_identity::openpgp::ExportProfile::V4,
+            1 => mesh_identity::openpgp::ExportProfile::V6,
+            _ => {
+                set_last_error("invalid OpenPGP profile (must be 0 for v4 or 1 for v6)");
+                return MESH_ERR_INVALID_ARG;
+            }
+        };
+
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("installation handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+
+        let uid = unsafe { slice::from_raw_parts(uid_ptr, uid_len) };
+        let doc = unsafe { slice::from_raw_parts(doc_ptr, doc_len) };
+
+        let peer = if !peer_cert_ptr.is_null() && peer_cert_len > 0 {
+            if peer_cert_len > MAX_OPENPGP_CERTIFICATE_BYTES
+                || peer_uid_ptr.is_null()
+                || peer_uid_len == 0
+                || peer_uid_len > MAX_OPENPGP_USER_ID_BYTES
+            {
+                set_last_error("invalid peer certificate arguments for cross-certification");
+                return MESH_ERR_INVALID_ARG;
+            }
+            let peer_cert = unsafe { slice::from_raw_parts(peer_cert_ptr, peer_cert_len) };
+            let peer_uid = unsafe { slice::from_raw_parts(peer_uid_ptr, peer_uid_len) };
+            Some((peer_cert.to_vec(), peer_uid.to_vec()))
+        } else {
+            None
+        };
+
+        let preview = match mesh_identity::openpgp::ExportPreview::new(
+            &mut handle.installation,
+            profile,
+            uid.to_vec(),
+            created_secs,
+            doc.to_vec(),
+            peer,
+        ) {
+            Ok(p) => p,
+            Err(e) => {
+                set_last_error(format!("{e}"));
+                return map_import_error(&e);
+            }
+        };
+
+        let warning_cstr = match CString::new(mesh_identity::openpgp::ExportPreview::WARNING) {
+            Ok(c) => c,
+            Err(_) => {
+                set_last_error("failed to create warning CString");
+                return MESH_ERR_INTERNAL;
+            }
+        };
+
+        let peer_fp_cstr = if let Some((fp, _)) = preview.certification_target() {
+            CString::new(hex::encode(fp.as_bytes())).ok()
+        } else {
+            None
+        };
+
+        unsafe {
+            *out_preview = Box::into_raw(Box::new(MeshOpenPgpPreviewHandle {
+                preview: Some(preview),
+            }));
+            *out_warning = warning_cstr.into_raw();
+            *out_peer_fp = peer_fp_cstr
+                .map(CString::into_raw)
+                .unwrap_or(std::ptr::null_mut());
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Confirm an OpenPGP export preview, consuming the preview handle and issuing artifacts.
+///
+/// Returns allocated certificate buffer, detached signature buffer, and peer cross-certification JSON.
+/// Buffers must be freed with `mesh_buffer_free` and `mesh_string_free`.
+///
+/// # Safety
+///
+/// - `preview_handle` must be a valid, non-null pointer to `MeshOpenPgpPreviewHandle`.
+/// - `installation_handle` must be a valid, non-null pointer to `MeshInstallationHandle`.
+/// - Out pointers must be valid and non-null.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_openpgp_preview_confirm(
+    preview_handle: *mut MeshOpenPgpPreviewHandle,
+    installation_handle: *mut MeshInstallationHandle,
+    out_cert_ptr: *mut *mut u8,
+    out_cert_len: *mut usize,
+    out_detached_ptr: *mut *mut u8,
+    out_detached_len: *mut usize,
+    out_peer_signatures_json: *mut *mut c_char,
+) -> i32 {
+    let inst_ptr = installation_handle;
+    clear_last_error();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if preview_handle.is_null() {
+            set_last_error("preview_handle is null in mesh_openpgp_preview_confirm");
+            return MESH_ERR_INVALID_ARG;
+        }
+
+        // Take ownership immediately so preview_handle is reliably deallocated on any return path.
+        let mut boxed_preview = unsafe { Box::from_raw(preview_handle) };
+
+        if installation_handle.is_null()
+            || out_cert_ptr.is_null()
+            || out_cert_len.is_null()
+            || out_detached_ptr.is_null()
+            || out_detached_len.is_null()
+            || out_peer_signatures_json.is_null()
+        {
+            set_last_error("invalid arguments passed to mesh_openpgp_preview_confirm");
+            return MESH_ERR_INVALID_ARG;
+        }
+
+        let inst = unsafe { &mut *installation_handle };
+        if inst.is_poisoned {
+            set_last_error("installation handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+
+        let preview = match boxed_preview.preview.take() {
+            Some(p) => p,
+            None => {
+                set_last_error("OpenPGP export preview has already been confirmed or disposed");
+                return MESH_ERR_OPENPGP_PREVIEW_EXPIRED;
+            }
+        };
+
+        let artifacts = match preview.confirm(&mut inst.installation) {
+            Ok(a) => a,
+            Err(e) => {
+                let err_str = e.to_string();
+                set_last_error(err_str.clone());
+                if err_str.contains("no longer current") {
+                    return MESH_ERR_OPENPGP_PREVIEW_EXPIRED;
+                } else if err_str.contains("selected identity does not match") {
+                    return MESH_ERR_OPENPGP_KEY_MISMATCH;
+                } else {
+                    return MESH_ERR_OPENPGP_CERTIFICATE;
+                }
+            }
+        };
+
+        let mut cert_boxed = artifacts.certificate.into_boxed_slice();
+        let mut detached_boxed = artifacts.detached.into_boxed_slice();
+
+        let peer_sigs: Vec<PeerSignatureJson> = artifacts
+            .peer_signatures
+            .into_iter()
+            .map(|(label, bytes)| PeerSignatureJson {
+                label: label.to_string(),
+                signature_hex: hex::encode(bytes),
+            })
+            .collect();
+
+        let peer_sigs_json = match serde_json::to_string(&peer_sigs) {
+            Ok(s) => s,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+
+        let peer_sigs_cstr = match CString::new(peer_sigs_json) {
+            Ok(c) => c,
+            Err(_) => {
+                set_last_error("failed to create CString from peer signatures JSON");
+                return MESH_ERR_INTERNAL;
+            }
+        };
+
+        unsafe {
+            *out_cert_ptr = cert_boxed.as_mut_ptr();
+            *out_cert_len = cert_boxed.len();
+            *out_detached_ptr = detached_boxed.as_mut_ptr();
+            *out_detached_len = detached_boxed.len();
+            *out_peer_signatures_json = peer_sigs_cstr.into_raw();
+        }
+
+        std::mem::forget(cert_boxed);
+        std::mem::forget(detached_boxed);
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        if !inst_ptr.is_null() {
+            unsafe {
+                (*inst_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Free an unconfirmed `MeshOpenPgpPreviewHandle`.
+///
+/// # Safety
+///
+/// - `handle` must be null or a valid pointer to a `MeshOpenPgpPreviewHandle` that has not yet been freed.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_openpgp_preview_free(handle: *mut MeshOpenPgpPreviewHandle) {
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        if !handle.is_null() {
+            drop(unsafe { Box::from_raw(handle) });
+        }
+    }));
+}
+
+/// Remember OpenPGP peer revocation signatures in this installation.
+///
+/// # Safety
+///
+/// - `handle` must be a valid pointer to a `MeshInstallationHandle`.
+/// - `rev_ptr` must point to `rev_len` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_installation_openpgp_remember_revocations(
+    handle: *mut MeshInstallationHandle,
+    rev_ptr: *const u8,
+    rev_len: usize,
+) -> i32 {
+    let handle_ptr = handle;
+    clear_last_error();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null()
+            || rev_ptr.is_null()
+            || rev_len == 0
+            || rev_len > MAX_OPENPGP_CERTIFICATE_BYTES
+        {
+            set_last_error(
+                "invalid arguments passed to mesh_installation_openpgp_remember_revocations",
+            );
+            return MESH_ERR_INVALID_ARG;
+        }
+
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("installation handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+
+        let rev_bytes = unsafe { slice::from_raw_parts(rev_ptr, rev_len) };
+        match mesh_identity::openpgp::remember_peer_revocations(&mut handle.installation, rev_bytes)
+        {
+            Ok(_) => MESH_OK,
+            Err(e) => {
+                set_last_error(format!("{e}"));
+                map_import_error(&e)
+            }
+        }
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
         MESH_ERR_PANIC
     })
 }

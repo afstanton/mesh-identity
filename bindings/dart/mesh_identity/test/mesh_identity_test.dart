@@ -1774,4 +1774,646 @@ void main() {
       },
     );
   });
+
+  group('OpenPGP Interoperability Bridge', () {
+    test('inspects OpenPGP certificates and checks defensive limits', () {
+      expect(
+        () => MeshInstallation.inspectOpenPgpCertificate(Uint8List(0)),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+      expect(
+        () => MeshInstallation.inspectOpenPgpCertificate(
+          Uint8List(MeshInstallation.maxOpenPgpCertificateBytes + 1),
+        ),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+      expect(
+        () => MeshInstallation.inspectOpenPgpCertificate(Uint8List(10)),
+        throwsA(isA<OpenPgpCertificateException>()),
+      );
+    });
+
+    test('statutory privacy warning is present on OpenPgpExportPreview', () {
+      final seed = MeshInstallation.generateSeed();
+      final inst = MeshInstallation(seed: seed);
+
+      final preview = inst.createOpenPgpPreview(
+        profile: OpenPgpProfile.v4,
+        userId: 'alice@example.com',
+        document: Uint8List.fromList(utf8.encode('Mesh Identity Verification')),
+      );
+
+      expect(
+        preview.warning,
+        contains('Anyone who has seen this Mesh public key'),
+      );
+      expect(preview.warning, equals(OpenPgpExportPreview.privacyWarning));
+      expect(preview.userId, equals('alice@example.com'));
+      expect(preview.profile, equals(OpenPgpProfile.v4));
+      expect(preview.isDisposed, isFalse);
+
+      preview.dispose();
+      expect(preview.isDisposed, isTrue);
+      expect(
+        () => preview.confirm(inst),
+        throwsA(isA<OpenPgpPreviewExpiredException>()),
+      );
+
+      inst.dispose();
+    });
+
+    test('v4 profile end-to-end export preview and confirmation', () {
+      final seed = MeshInstallation.generateSeed();
+      final inst = MeshInstallation(seed: seed);
+      final doc = Uint8List.fromList(utf8.encode('Hello OpenPGP v4'));
+
+      final preview = inst.createOpenPgpPreview(
+        profile: OpenPgpProfile.v4,
+        userId: 'v4user@mesh.org',
+        document: doc,
+      );
+
+      final artifacts = preview.confirm(inst);
+      expect(preview.isDisposed, isTrue);
+      expect(artifacts.certificate.isNotEmpty, isTrue);
+      expect(artifacts.detachedSignature.isNotEmpty, isTrue);
+      expect(artifacts.peerSignatures, isEmpty);
+
+      // Certificate inspection
+      final cert = MeshInstallation.inspectOpenPgpCertificate(
+        artifacts.certificate,
+      );
+      expect(cert.version, equals(4));
+      expect(cert.algorithm, equals('EdDSALegacy'));
+      expect(cert.userIds, contains('v4user@mesh.org'));
+      expect(cert.primaryKeyBytes, equals(inst.selectedIdentity));
+      expect(cert.fingerprint.isNotEmpty, isTrue);
+
+      inst.dispose();
+    });
+
+    test('v6 profile end-to-end export preview and confirmation', () {
+      final seed = MeshInstallation.generateSeed();
+      final inst = MeshInstallation(seed: seed);
+      final doc = Uint8List.fromList(utf8.encode('Hello OpenPGP v6'));
+
+      final preview = inst.createOpenPgpPreview(
+        profile: OpenPgpProfile.v6,
+        userId: 'v6user@mesh.org',
+        document: doc,
+      );
+
+      final artifacts = preview.confirm(inst);
+      expect(preview.isDisposed, isTrue);
+      expect(artifacts.certificate.isNotEmpty, isTrue);
+      expect(artifacts.detachedSignature.isNotEmpty, isTrue);
+      expect(artifacts.peerSignatures, isEmpty);
+
+      // Certificate inspection
+      final cert = MeshInstallation.inspectOpenPgpCertificate(
+        artifacts.certificate,
+      );
+      expect(cert.version, equals(6));
+      expect(cert.algorithm, equals('Ed25519'));
+      expect(cert.userIds, contains('v6user@mesh.org'));
+      expect(cert.primaryKeyBytes, equals(inst.selectedIdentity));
+      expect(cert.fingerprint.length, equals(64));
+
+      inst.dispose();
+    });
+
+    test(
+      'cross-certification generates peer signatures for peer certificate',
+      () {
+        final seedAlice = MeshInstallation.generateSeed();
+        final alice = MeshInstallation(seed: seedAlice);
+
+        final seedBob = MeshInstallation.generateSeed();
+        final bob = MeshInstallation(seed: seedBob);
+
+        // Alice exports a v4 certificate
+        final alicePreview = alice.createOpenPgpPreview(
+          profile: OpenPgpProfile.v4,
+          userId: 'alice@mesh.org',
+          document: Uint8List.fromList(utf8.encode('Alice doc')),
+        );
+        final aliceArtifacts = alicePreview.confirm(alice);
+        final aliceCert = MeshInstallation.inspectOpenPgpCertificate(
+          aliceArtifacts.certificate,
+        );
+
+        // Bob creates an export preview including Alice as peer
+        final bobPreview = bob.createOpenPgpPreview(
+          profile: OpenPgpProfile.v6,
+          userId: 'bob@mesh.org',
+          document: Uint8List.fromList(utf8.encode('Bob doc')),
+          peerCertificate: aliceArtifacts.certificate,
+          peerUserId: 'alice@mesh.org',
+        );
+
+        expect(
+          bobPreview.peerCertificationFingerprint,
+          equals(aliceCert.fingerprint),
+        );
+        expect(bobPreview.peerCertificationUserId, equals('alice@mesh.org'));
+
+        final bobArtifacts = bobPreview.confirm(bob);
+        expect(bobArtifacts.peerSignatures.isNotEmpty, isTrue);
+        for (final sig in bobArtifacts.peerSignatures) {
+          expect(sig.label.isNotEmpty, isTrue);
+          expect(sig.bytes.isNotEmpty, isTrue);
+        }
+
+        alice.dispose();
+        bob.dispose();
+      },
+    );
+
+    test(
+      'preview invalidation: consumed upon confirmation or persona change',
+      () {
+        final seed = MeshInstallation.generateSeed();
+        final inst = MeshInstallation(seed: seed);
+        final otherSeed = MeshInstallation.generateSeed();
+        final otherKey = inst.addIdentity(otherSeed);
+
+        // Superseded preview
+        final preview1 = inst.createOpenPgpPreview(
+          profile: OpenPgpProfile.v4,
+          userId: 'user1@mesh.org',
+          document: Uint8List.fromList(utf8.encode('doc1')),
+        );
+
+        final preview2 = inst.createOpenPgpPreview(
+          profile: OpenPgpProfile.v4,
+          userId: 'user2@mesh.org',
+          document: Uint8List.fromList(utf8.encode('doc2')),
+        );
+
+        // Confirming the first preview throws because preview2 replaced it in installation state
+        expect(
+          () => preview1.confirm(inst),
+          throwsA(isA<OpenPgpPreviewExpiredException>()),
+        );
+
+        // Preview 2 succeeds
+        final artifacts2 = preview2.confirm(inst);
+        expect(artifacts2.certificate.isNotEmpty, isTrue);
+
+        // Second confirm of preview2 throws because it was consumed
+        expect(
+          () => preview2.confirm(inst),
+          throwsA(isA<OpenPgpPreviewExpiredException>()),
+        );
+
+        // Persona change invalidates pending preview
+        final preview3 = inst.createOpenPgpPreview(
+          profile: OpenPgpProfile.v4,
+          userId: 'user3@mesh.org',
+          document: Uint8List.fromList(utf8.encode('doc3')),
+        );
+        inst.selectIdentity(otherKey);
+        expect(
+          () => preview3.confirm(inst),
+          throwsA(isA<OpenPgpPreviewExpiredException>()),
+        );
+
+        inst.dispose();
+      },
+    );
+
+    test('peer certificate import adds contact and returns provenance', () {
+      final seedAlice = MeshInstallation.generateSeed();
+      final alice = MeshInstallation(seed: seedAlice);
+
+      final seedBob = MeshInstallation.generateSeed();
+      final bob = MeshInstallation(seed: seedBob);
+
+      // Alice exports certificate
+      final alicePreview = alice.createOpenPgpPreview(
+        profile: OpenPgpProfile.v4,
+        userId: 'alice@mesh.org',
+        document: Uint8List.fromList(utf8.encode('doc')),
+      );
+      final aliceArtifacts = alicePreview.confirm(alice);
+      final aliceCert = MeshInstallation.inspectOpenPgpCertificate(
+        aliceArtifacts.certificate,
+      );
+
+      expect(bob.getContact(alice.selectedIdentity), isNull);
+
+      // Bob imports Alice's certificate
+      final provenance = bob.importOpenPgpPeer(
+        certificate: aliceArtifacts.certificate,
+        expectedPublicKey: alice.selectedIdentity,
+        userId: 'alice@mesh.org',
+      );
+
+      expect(provenance.primaryFingerprint, equals(aliceCert.fingerprint));
+      expect(provenance.signingKeyFingerprint, equals(aliceCert.fingerprint));
+      expect(provenance.userId, equals('alice@mesh.org'));
+
+      // Alice is now recorded in Bob's contact store
+      final contact = bob.getContact(alice.selectedIdentity);
+      expect(contact, isNotNull);
+      expect(contact!.peerPublicKey, equals(alice.selectedIdentity));
+      expect(
+        contact.verificationStatus,
+        equals(VerificationStatus.importedUnverified),
+      );
+
+      // Attempting to import with mismatched expected key throws KeyMismatchException
+      final wrongKey = Uint8List(32)..fillRange(0, 32, 99);
+      expect(
+        () => bob.importOpenPgpPeer(
+          certificate: aliceArtifacts.certificate,
+          expectedPublicKey: wrongKey,
+          userId: 'alice@mesh.org',
+        ),
+        throwsA(isA<OpenPgpKeyMismatchException>()),
+      );
+
+      alice.dispose();
+      bob.dispose();
+    });
+
+    test('OpenPgpExportPreview document view is strictly unmodifiable', () {
+      final seed = MeshInstallation.generateSeed();
+      final inst = MeshInstallation(seed: seed);
+      final doc = Uint8List.fromList([1, 2, 3]);
+
+      final preview = inst.createOpenPgpPreview(
+        profile: OpenPgpProfile.v4,
+        userId: 'alice@mesh.org',
+        document: doc,
+      );
+
+      // Mutating preview.document must throw UnsupportedError
+      expect(() => preview.document[0] = 99, throwsA(isA<UnsupportedError>()));
+
+      inst.dispose();
+    });
+
+    test('OpenPgpCertificate equals and hashCode contract', () {
+      final cert1 = OpenPgpCertificate(
+        fingerprint: 'abcd',
+        version: 4,
+        algorithm: 'EdDSALegacy',
+        primaryKeyBytes: Uint8List.fromList([1, 2, 3]),
+        userIds: ['user1', 'user2'],
+        subkeys: [
+          OpenPgpSubkey(
+            fingerprint: 'sub1',
+            algorithm: 'Ed25519',
+            publicKeyBytes: Uint8List.fromList([4, 5]),
+          ),
+        ],
+      );
+
+      final cert2 = OpenPgpCertificate(
+        fingerprint: 'abcd',
+        version: 4,
+        algorithm: 'EdDSALegacy',
+        primaryKeyBytes: Uint8List.fromList([1, 2, 3]),
+        userIds: ['user1', 'user2'],
+        subkeys: [
+          OpenPgpSubkey(
+            fingerprint: 'sub1',
+            algorithm: 'Ed25519',
+            publicKeyBytes: Uint8List.fromList([4, 5]),
+          ),
+        ],
+      );
+
+      final cert3 = OpenPgpCertificate(
+        fingerprint: 'abcd',
+        version: 4,
+        algorithm: 'EdDSALegacy',
+        primaryKeyBytes: Uint8List.fromList([1, 2, 3]),
+        userIds: ['different', 'user2'],
+        subkeys: cert1.subkeys,
+      );
+
+      expect(cert1, equals(cert2));
+      expect(cert1.hashCode, equals(cert2.hashCode));
+      expect(cert1, isNot(equals(cert3)));
+      expect(cert1.hashCode, isNot(equals(cert3.hashCode)));
+    });
+
+    test(
+      'owned secret key import returns seed and enables complete snapshot restore',
+      () {
+        const fixtureSecretHex =
+            'c58504684ee18016092b06010401da470f010107400392792031b6ea1dde02c5e383b84744dbd661b21b70d1778c484cce6bf28f06fe0903082824f04c07c8a0a8e0349f374e1f83e73a43aae98133234ecf76eaff13f47b1104aa4e35d18d2fdf5c1a4c35f3b0234a776b433e43972765fdab760f7e54ea3c53727021ec4a947b2a0e26519803cd1d50726f7465637465642063657274696669636174652066697874757265c27b0413160800230502684ee18016210417031e12de755edaf4c9981476322c1e4b10409d021b03021901000a091076322c1e4b10409dea7100ff43b20203e8ad0432035b6ce1c73bc623f0bca101d101e3b62ca44f72b5fe6e1300ff69a029e2a08f00208fdefdc65b69729f7d063dfdda836641a8386f7bc9882102';
+        const fixtureExpectedPkHex =
+            '0392792031b6ea1dde02c5e383b84744dbd661b21b70d1778c484cce6bf28f06';
+
+        final secretBytes = _hexToBytes(fixtureSecretHex);
+        final expectedPk = _hexToBytes(fixtureExpectedPkHex);
+
+        final rootSeed = MeshInstallation.generateSeed();
+        final inst = MeshInstallation(seed: rootSeed);
+        expect(inst.identities.length, equals(1));
+
+        // Import owned secret key
+        final result = inst.importOpenPgpOwned(
+          secretKeyCertificate: secretBytes,
+          expectedPublicKey: expectedPk,
+          userId: 'Protected certificate fixture',
+          passphrase: 'fixture passphrase',
+          at: DateTime.fromMillisecondsSinceEpoch(1750000001000),
+        );
+
+        // Result has extracted 32-byte seed
+        expect(result.seed.length, equals(32));
+        expect(result.seed[0], equals(0));
+        expect(result.seed[1], equals(17));
+        expect(
+          result.provenance.userId,
+          equals('Protected certificate fixture'),
+        );
+
+        // Installation now has two personas
+        expect(inst.identities.length, equals(2));
+        inst.selectIdentity(expectedPk);
+        expect(inst.selectedIdentity, equals(expectedPk));
+
+        // Save snapshot containing both personas
+        final snapshot = inst.save();
+        inst.dispose();
+
+        // Path 1: Restoring with retained import seed succeeds!
+        final restored1 = MeshInstallation.restore(
+          snapshotBytes: snapshot,
+          signingKeySeeds: [rootSeed, result.seed],
+        );
+        expect(restored1.identities.length, equals(2));
+        expect(restored1.selectedIdentity, equals(expectedPk));
+        restored1.dispose();
+
+        // Path 2: Standalone seed extraction from retained certificate also restores!
+        final extractedSeed = MeshInstallation.extractOpenPgpSecretSeed(
+          secretKeyCertificate: secretBytes,
+          expectedPublicKey: expectedPk,
+          userId: 'Protected certificate fixture',
+          passphrase: 'fixture passphrase',
+          at: DateTime.fromMillisecondsSinceEpoch(1750000001000),
+        );
+        expect(extractedSeed, equals(result.seed));
+
+        final restored2 = MeshInstallation.restore(
+          snapshotBytes: snapshot,
+          signingKeySeeds: [rootSeed, extractedSeed],
+        );
+        expect(restored2.identities.length, equals(2));
+        expect(restored2.selectedIdentity, equals(expectedPk));
+        restored2.dispose();
+      },
+    );
+
+    test('owned secret import rejects public certificate or mismatched key', () {
+      final seed = MeshInstallation.generateSeed();
+      final inst = MeshInstallation(seed: seed);
+
+      final preview = inst.createOpenPgpPreview(
+        profile: OpenPgpProfile.v4,
+        userId: 'alice@mesh.org',
+        document: Uint8List.fromList(utf8.encode('doc')),
+      );
+      final artifacts = preview.confirm(inst);
+
+      // Passing public certificate to importOpenPgpOwned fails with SecretMissingException
+      expect(
+        () => inst.importOpenPgpOwned(
+          secretKeyCertificate: artifacts.certificate,
+          expectedPublicKey: inst.selectedIdentity,
+          userId: 'alice@mesh.org',
+        ),
+        throwsA(isA<OpenPgpSecretMissingException>()),
+      );
+
+      // Passing corrupt bytes fails with OpenPgpCertificateException
+      expect(
+        () => inst.importOpenPgpOwned(
+          secretKeyCertificate: Uint8List.fromList([1, 2, 3, 4, 5]),
+          expectedPublicKey: inst.selectedIdentity,
+          userId: 'alice@mesh.org',
+        ),
+        throwsA(isA<OpenPgpCertificateException>()),
+      );
+
+      // Passing public certificate to importOpenPgpOwned fails with SecretMissingException even with different key
+      final wrongKey = Uint8List(32)..fillRange(0, 32, 7);
+      expect(
+        () => inst.importOpenPgpOwned(
+          secretKeyCertificate: artifacts.certificate,
+          expectedPublicKey: wrongKey,
+          userId: 'alice@mesh.org',
+        ),
+        throwsA(isA<OpenPgpSecretMissingException>()),
+      );
+
+      inst.dispose();
+    });
+
+    test('openpgp contact import survives snapshot save and restore', () {
+      final seedAlice = MeshInstallation.generateSeed();
+      final alice = MeshInstallation(seed: seedAlice);
+
+      final seedBob = MeshInstallation.generateSeed();
+      final bob = MeshInstallation(seed: seedBob);
+
+      final alicePreview = alice.createOpenPgpPreview(
+        profile: OpenPgpProfile.v4,
+        userId: 'alice@mesh.org',
+        document: Uint8List.fromList(utf8.encode('doc')),
+      );
+      final aliceArtifacts = alicePreview.confirm(alice);
+
+      bob.importOpenPgpPeer(
+        certificate: aliceArtifacts.certificate,
+        expectedPublicKey: alice.selectedIdentity,
+        userId: 'alice@mesh.org',
+      );
+      final initialContact = bob.getContact(alice.selectedIdentity);
+      expect(initialContact, isNotNull);
+      expect(initialContact!.peerPublicKey, equals(alice.selectedIdentity));
+
+      // Save snapshot and restore Bob
+      final snapshot = bob.save();
+      bob.dispose();
+
+      final restoredBob = MeshInstallation.restore(
+        snapshotBytes: snapshot,
+        signingKeySeeds: [seedBob],
+      );
+      final restoredContact = restoredBob.getContact(alice.selectedIdentity);
+      expect(restoredContact, isNotNull);
+      expect(restoredContact!.peerPublicKey, equals(alice.selectedIdentity));
+
+      alice.dispose();
+      restoredBob.dispose();
+    });
+
+    test('enforces defensive bounds on OpenPGP inputs', () {
+      final seed = MeshInstallation.generateSeed();
+      final inst = MeshInstallation(seed: seed);
+      final validKey = inst.selectedIdentity;
+      final validDoc = Uint8List.fromList(utf8.encode('doc'));
+
+      // User ID bounds
+      expect(
+        () => inst.createOpenPgpPreview(
+          profile: OpenPgpProfile.v4,
+          userId: '',
+          document: validDoc,
+        ),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+      expect(
+        () => inst.createOpenPgpPreview(
+          profile: OpenPgpProfile.v4,
+          userId: 'a' * 2049,
+          document: validDoc,
+        ),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+
+      // Document bounds
+      expect(
+        () => inst.createOpenPgpPreview(
+          profile: OpenPgpProfile.v4,
+          userId: 'user@mesh.org',
+          document: Uint8List(MeshInstallation.maxOpenPgpDocumentBytes + 1),
+        ),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+
+      // Peer certificate bounds
+      expect(
+        () => inst.createOpenPgpPreview(
+          profile: OpenPgpProfile.v4,
+          userId: 'user@mesh.org',
+          document: validDoc,
+          peerCertificate: Uint8List(
+            MeshInstallation.maxOpenPgpCertificateBytes + 1,
+          ),
+          peerUserId: 'peer@mesh.org',
+        ),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+
+      // Peer import bounds
+      expect(
+        () => inst.importOpenPgpPeer(
+          certificate: Uint8List(0),
+          expectedPublicKey: validKey,
+          userId: 'user@mesh.org',
+        ),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+      expect(
+        () => inst.importOpenPgpPeer(
+          certificate: Uint8List(10),
+          expectedPublicKey: Uint8List(31),
+          userId: 'user@mesh.org',
+        ),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+      expect(
+        () => inst.importOpenPgpPeer(
+          certificate: Uint8List(10),
+          expectedPublicKey: validKey,
+          userId: '',
+        ),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+
+      // Owned import bounds
+      expect(
+        () => inst.importOpenPgpOwned(
+          secretKeyCertificate: Uint8List(0),
+          expectedPublicKey: validKey,
+          userId: 'user@mesh.org',
+        ),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+      expect(
+        () => inst.importOpenPgpOwned(
+          secretKeyCertificate: Uint8List(10),
+          expectedPublicKey: Uint8List(33),
+          userId: 'user@mesh.org',
+        ),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+      expect(
+        () => inst.importOpenPgpOwned(
+          secretKeyCertificate: Uint8List(10),
+          expectedPublicKey: validKey,
+          userId: 'user@mesh.org',
+          passphrase: 'p' * 2049,
+        ),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+
+      // Revocation bounds
+      expect(
+        () => inst.rememberOpenPgpRevocations(Uint8List(0)),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+      expect(
+        () => inst.rememberOpenPgpRevocations(
+          Uint8List(MeshInstallation.maxOpenPgpCertificateBytes + 1),
+        ),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+
+      // Timestamp bounds (pre-1970 and post-2106)
+      expect(
+        () => inst.createOpenPgpPreview(
+          profile: OpenPgpProfile.v4,
+          userId: 'user@mesh.org',
+          document: validDoc,
+          at: DateTime.utc(2107, 1, 1),
+        ),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+
+      // Disposed installation throws DisposedException
+      inst.dispose();
+      expect(
+        () => inst.createOpenPgpPreview(
+          profile: OpenPgpProfile.v4,
+          userId: 'user@mesh.org',
+          document: validDoc,
+        ),
+        throwsA(isA<DisposedException>()),
+      );
+      expect(
+        () => inst.importOpenPgpPeer(
+          certificate: Uint8List(10),
+          expectedPublicKey: validKey,
+          userId: 'user@mesh.org',
+        ),
+        throwsA(isA<DisposedException>()),
+      );
+    });
+  });
+}
+
+Uint8List _hexToBytes(String hex) {
+  final clean = hex.replaceAll(' ', '');
+  if (clean.length.isOdd) {
+    throw FormatException('Hex string must have an even length', hex);
+  }
+  final len = clean.length ~/ 2;
+  final bytes = Uint8List(len);
+  for (var i = 0; i < len; i++) {
+    final b = int.tryParse(clean.substring(i * 2, i * 2 + 2), radix: 16);
+    if (b == null) {
+      throw FormatException('Non-hexadecimal character in hex string', hex);
+    }
+    bytes[i] = b;
+  }
+  return bytes;
 }

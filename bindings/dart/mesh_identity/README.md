@@ -14,6 +14,7 @@ Built using **Dart Native Assets** (`dart:ffi`), compiling the native Rust engin
 - **Contact Management**: Private local contact records, peer public key importation, and administrative blocking.
 - **Device-to-Device Handoff**: Monotonic voting role migration, voter lock transfer, gating, and signed takeover statements across physical devices.
 - **Byzantine Group Admission & Governance**: Multi-party group formation, verified contact invitations, vouchers, two-phase commit outbox staging (`save` / `confirmSaved` / `takeOutgoing`), and consensus leave workflows.
+- **OpenPGP Interoperability Bridge**: OpenPGP certificate inspection (v4 and v6), statutory privacy disclosure export previews, detached document signing, peer cross-certification, peer public key contact import, and passphrase-unlocked owned secret key import.
 - **Memory Safety & Zeroization**: Native panics are caught at the FFI boundary, pointers and lengths are strictly bounded before allocation, and native memory buffers for seeds are securely zeroized upon release. (Callers are responsible for zeroizing their own `Uint8List` seed copies with `fillRange(0, 32, 0)` when no longer needed.)
 - **Concurrency**: Instances wrap raw native pointers without internal locks; do not access the same `MeshInstallation` concurrently across multiple isolates.
 
@@ -191,6 +192,55 @@ for (final msg in outgoingMessages) {
 groupHandle.invite(groupId: groupId, candidateKey: verifiedContactKey);
 ```
 
+### 8. OpenPGP Interoperability Bridge
+
+```dart
+// 1. Inspect an external OpenPGP certificate (v4 or v6)
+final cert = MeshInstallation.inspectOpenPgpCertificate(peerCertBytes);
+print('Inspected OpenPGP key: ${cert.fingerprint} (v${cert.version})');
+
+// 2. Prepare an export preview for the selected persona
+final preview = installation.createOpenPgpPreview(
+  profile: OpenPgpProfile.v4,
+  userId: 'alice@example.com',
+  document: documentBytes,
+  // Optional: cross-certify a peer certificate
+  peerCertificate: peerCertBytes,
+  peerUserId: 'bob@example.com',
+);
+
+// CRITICAL: Display the statutory privacy warning to the user before confirming
+print('Privacy disclosure: ${preview.warning}');
+
+// 3. Confirm preview to generate transferable certificate and detached signature
+final artifacts = preview.confirm(installation);
+await fileSystem.write('alice.asc', artifacts.certificate);
+await fileSystem.write('document.sig', artifacts.detachedSignature);
+
+// 4. Import a peer's OpenPGP certificate as an unverified contact
+final provenance = installation.importOpenPgpPeer(
+  certificate: peerCertBytes,
+  expectedPublicKey: peerMeshPublicKey,
+  userId: 'bob@example.com',
+);
+print('Imported peer contact with OpenPGP fingerprint: ${provenance.primaryFingerprint}');
+
+// 5. Import an owned OpenPGP secret key and retain the seed for snapshot restoration
+final ownedResult = installation.importOpenPgpOwned(
+  secretKeyCertificate: secretKeyBytes,
+  expectedPublicKey: myMeshPublicKey,
+  userId: 'alice@example.com',
+  passphrase: 'secret-passphrase',
+);
+await secureStorage.write('imported_seed', ownedResult.seed);
+
+// Later, restore installation with all persona seeds:
+final restored = MeshInstallation.restore(
+  snapshotBytes: savedSnapshot,
+  signingKeySeeds: [rootSeed, ownedResult.seed],
+);
+```
+
 ---
 
 ## Roadmap
@@ -200,7 +250,7 @@ This package is being built in verified, incremental slices:
 - [x] **Slice 2**: Cryptographic Encounter protocol (initiator / responder, SAS verification, QR transport).
 - [x] **Slice 3**: Device-to-device handoff (identity migration and voter lock transfer).
 - [x] **Slice 4**: Byzantine group admission governance, voting ceremonies, and state machines.
-- [ ] **Slice 5**: OpenPGP cross-signing and trust bridging.
+- [x] **Slice 5**: OpenPGP cross-signing and trust bridging.
 
 ---
 

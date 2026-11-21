@@ -6,7 +6,7 @@ use super::{
     AdmissionError, AdmissionUpdate, DirectVoucher, Error, Installation, Key, MAX_LIFETIME_MS,
     RosterHistory, VouchedGroup, parse_verifying_key, random_id,
 };
-use crate::groups::{LocalInstallation, Proposal, Vote};
+use crate::groups::{MemberLocalState, Proposal, Vote};
 use crate::session::installation::{
     group_admission_consent_message, group_admission_vote_message,
     group_invitation_cancellation_message, group_invitation_message,
@@ -523,7 +523,7 @@ impl VouchedGroup {
     /// Sign an admission vote through the local membership and backup gates.
     pub fn sign_admission_vote(
         &self,
-        local: &LocalInstallation,
+        local: &MemberLocalState,
         proposal: &VouchedProposal,
         voter: &Installation,
         decision: Vote,

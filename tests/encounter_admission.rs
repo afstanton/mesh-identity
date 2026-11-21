@@ -1010,7 +1010,7 @@ fn partitioned_invitations_reconnect_and_renew_against_the_agreed_parent() {
 
 #[test]
 fn offline_departure_suppresses_delayed_presentation_and_preserves_other_identity() {
-    use mesh_identity::groups::{LocalInstallation, evidence::CatchUp};
+    use mesh_identity::groups::{MemberLocalState, evidence::CatchUp};
 
     let mut s = Scenario::new(115, Policy::InviterOnly);
     let (alice, carol) = (s.alice.selected(), s.carol.selected());
@@ -1030,13 +1030,13 @@ fn offline_departure_suppresses_delayed_presentation_and_preserves_other_identit
     let departing = offline.membership(alice).unwrap();
     let remaining = offline.membership(other).unwrap();
 
-    let mut local = LocalInstallation::default();
+    let mut local = MemberLocalState::default();
     local.add_identity(departing.identity(), "Alice".into());
     local.add_identity(remaining.identity(), "Other persona".into());
     assert!(offline.may_present(&local, alice, departing));
 
     local.leave(departing).unwrap();
-    let mut local = LocalInstallation::restore(&local.snapshot().unwrap()).unwrap();
+    let mut local = MemberLocalState::restore(&local.snapshot().unwrap()).unwrap();
     assert!(!offline.may_present(&local, alice, departing));
     assert!(offline.may_present(&local, other, remaining));
 
@@ -1942,7 +1942,7 @@ fn voucher_is_audience_only_by_default() {
 
 #[test]
 fn blocked_member_stays_on_roster_but_cannot_trigger_local_presentation() {
-    use mesh_identity::groups::LocalInstallation;
+    use mesh_identity::groups::MemberLocalState;
 
     let mut s = Scenario::new(128, Policy::InviterOnly);
     let alice = s.alice.selected();
@@ -1960,9 +1960,9 @@ fn blocked_member_stays_on_roster_but_cannot_trigger_local_presentation() {
     let dave_tenure = s.group.membership(dave).unwrap();
     let bob_tenure = s.group.membership(bob).unwrap();
     let revision = s.group.revision();
-    let mut alice_local = LocalInstallation::default();
+    let mut alice_local = MemberLocalState::default();
     alice_local.add_identity(alice_tenure.identity(), "Alice".into());
-    let mut dave_local = LocalInstallation::default();
+    let mut dave_local = MemberLocalState::default();
     dave_local.add_identity(dave_tenure.identity(), "Dave".into());
 
     let mut inbox = support::Inbox::default();
@@ -2035,14 +2035,14 @@ fn signed_departure_survives_roster_updates_and_cannot_end_a_new_tenure() {
 
 #[test]
 fn delayed_delivery_after_leave_has_no_application_side_effects() {
-    use mesh_identity::groups::LocalInstallation;
+    use mesh_identity::groups::MemberLocalState;
 
     let mut s = Scenario::new(129, Policy::InviterOnly);
     let alice = s.alice.selected();
     let dave = s.dave.selected();
     let tenure = s.group.membership(alice).unwrap();
     let stale = s.group.clone();
-    let mut local = LocalInstallation::default();
+    let mut local = MemberLocalState::default();
     local.add_identity(tenure.identity(), "Alice".into());
     let mut inbox = support::Inbox::default();
     inbox.deliver(&s.group, &local, &s.alice, tenure, dave);
@@ -2325,7 +2325,7 @@ fn new_group_material_follows_the_current_agreed_roster() {
 
 #[test]
 fn simultaneous_group_memberships_keep_admission_evidence_and_departure_separate() {
-    use mesh_identity::groups::{LocalInstallation, evidence::VouchedGroup};
+    use mesh_identity::groups::{MemberLocalState, evidence::VouchedGroup};
 
     let mut s = Scenario::new(131, Policy::InviterOnly);
     let (alice, carol, bob, dave) = (
@@ -2335,7 +2335,7 @@ fn simultaneous_group_memberships_keep_admission_evidence_and_departure_separate
         s.dave.selected(),
     );
     let mut second = VouchedGroup::new(2, [alice, carol, dave], Policy::Unanimous);
-    let mut local = LocalInstallation::default();
+    let mut local = MemberLocalState::default();
     let first_tenure = s.group.membership(alice).unwrap();
     let second_tenure = second.membership(alice).unwrap();
     local.add_identity(first_tenure.identity(), "Alice".into());
@@ -3392,7 +3392,7 @@ fn group_exports_and_discovery_stay_independent_of_private_identity_disclosure()
     assert_eq!(disclosure.recipient, alice);
     assert_eq!(format!("{disclosure:?}"), "DisclosedLink { .. }");
     meet(&mut s.alice, &mut s.bob, 4, &mut s.rng);
-    let grouped = s.alice.group_contacts(alice, pair).unwrap();
+    let grouped = s.alice.linked_person_contacts(alice, pair).unwrap();
     assert_eq!(grouped.peers().count(), 2);
 
     assert_eq!(export(&s.alice), original);

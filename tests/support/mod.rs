@@ -85,7 +85,7 @@ impl Inbox {
     pub fn deliver(
         &mut self,
         group: &VouchedGroup,
-        local: &mesh_identity::groups::LocalInstallation,
+        local: &mesh_identity::groups::MemberLocalState,
         recipient: &Installation,
         tenure: mesh_identity::groups::Membership,
         sender: [u8; 32],

@@ -1991,7 +1991,7 @@ fn certified_rotation_requires_dual_key_consent_and_parent_quorums() {
 #[test]
 fn first_join_requires_certified_admission_on_its_trusted_parent() {
     use mesh_identity::groups::{
-        LocalInstallation, Policy,
+        MemberLocalState, Policy,
         evidence::{
             RosterCertificate, RosterFreshnessChallenge, RosterFreshnessError,
             SignedAdmissionConsent, SignedInvitation, VouchedGroup,
@@ -2080,7 +2080,7 @@ fn first_join_requires_certified_admission_on_its_trusted_parent() {
         .apply_certified_admission(&pending, voucher, &certificate)
         .unwrap();
     let responses = [&s.alice, &s.carol, &s.dave, &s.eve].map(|signer| {
-        let mut local = LocalInstallation::default();
+        let mut local = MemberLocalState::default();
         let tenure = s.group.membership(signer.selected()).unwrap();
         local.add_identity(tenure.identity(), "Member".into());
         s.group

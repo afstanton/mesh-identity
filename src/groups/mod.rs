@@ -43,9 +43,6 @@ pub struct MemberLocalState {
     backup_rosters: Option<BTreeMap<u64, BackupRoster>>,
 }
 
-/// Legacy alias for [`MemberLocalState`].
-pub type LocalInstallation = MemberLocalState;
-
 #[derive(Debug, Deserialize, Serialize)]
 struct BackupRoster {
     revision: u64,

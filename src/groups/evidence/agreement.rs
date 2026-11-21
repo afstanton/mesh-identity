@@ -6,7 +6,7 @@ use super::electorate::{
 use super::proof::{CarriedProof, ProofContext, verify_equivocation};
 use super::wire::{CertificateRef, CertificateV1, chain_digest_with_reports};
 use super::{CatchUp, Error, Installation, Key, VouchedGroup, parse_verifying_key, random_id};
-use crate::groups::{LocalInstallation, Membership};
+use crate::groups::{MemberLocalState, Membership};
 use crate::session::installation::{
     Error as InstallationError, group_roster_freshness_message, group_roster_vote_message,
 };
@@ -509,7 +509,7 @@ impl VouchedGroup {
     /// A failure leaves the backup gate and roster unchanged.
     pub fn reconcile_backup_with_freshness(
         &mut self,
-        local: &mut LocalInstallation,
+        local: &mut MemberLocalState,
         authenticated: &Self,
         challenge: RosterFreshnessChallenge,
         responses: &[RosterVote],
@@ -526,7 +526,7 @@ impl VouchedGroup {
     /// Respond from the member's active, authenticated group roster.
     pub fn attest_roster_freshness(
         &self,
-        local: &LocalInstallation,
+        local: &MemberLocalState,
         query: RosterFreshnessQuery,
         member: &Installation,
     ) -> Result<RosterVote, Error> {
@@ -548,7 +548,7 @@ impl VouchedGroup {
 
     fn check_local_roster_signer(
         &self,
-        local: &LocalInstallation,
+        local: &MemberLocalState,
         voter: &Installation,
     ) -> Result<Key, Error> {
         let key = self.check_local_voter(local, voter)?;
@@ -563,7 +563,7 @@ impl VouchedGroup {
     #[cfg(any(test, feature = "test-support"))]
     pub fn sign_roster_vote(
         &self,
-        local: &LocalInstallation,
+        local: &MemberLocalState,
         parent: [u8; 32],
         child: [u8; 32],
         round: u32,
@@ -584,7 +584,7 @@ impl VouchedGroup {
     #[cfg(any(test, feature = "test-support"))]
     pub fn sign_roster_round_change(
         &self,
-        local: &LocalInstallation,
+        local: &MemberLocalState,
         round: u32,
         prepared: Option<RosterPrepareProof>,
         voter: &Installation,
@@ -601,7 +601,7 @@ impl VouchedGroup {
     /// The callback receives the checkpoint and the wire vote for this request.
     pub fn sign_roster_vote_durable(
         &self,
-        local: &LocalInstallation,
+        local: &MemberLocalState,
         request: RosterVoteRequest,
         voter: &mut Installation,
         persist: impl FnOnce(&[u8], &[u8]) -> std::io::Result<()>,
@@ -633,7 +633,7 @@ impl VouchedGroup {
     /// Publish a round-change report only after its bytes and lock are durable.
     pub fn sign_roster_round_change_durable(
         &self,
-        local: &LocalInstallation,
+        local: &MemberLocalState,
         round: u32,
         prepared: Option<RosterPrepareProof>,
         voter: &mut Installation,

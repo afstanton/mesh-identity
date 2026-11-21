@@ -1,5 +1,5 @@
 #![cfg(feature = "groups")]
-use mesh_identity::groups::{Error, Group, Identity, LocalInstallation, Policy, Vote};
+use mesh_identity::groups::{Error, Group, Identity, MemberLocalState, Policy, Vote};
 use std::num::NonZeroUsize;
 
 const GAME: Identity = Identity(1);
@@ -9,7 +9,7 @@ const CANDIDATE: Identity = Identity(4);
 
 #[test]
 fn local_leave_survives_restart_and_affects_only_one_membership() {
-    let mut local = LocalInstallation::default();
+    let mut local = MemberLocalState::default();
     assert!(local.add_identity(GAME, "Bob".into()));
     assert!(local.add_identity(PRIVATE, "Bob".into()));
     assert!(!local.add_identity(GAME, "duplicate key".into()));
@@ -25,7 +25,7 @@ fn local_leave_survives_restart_and_affects_only_one_membership() {
         Err(Error::Ineligible)
     );
     local.leave(queued).unwrap();
-    let local = LocalInstallation::restore(&local.snapshot().unwrap()).unwrap();
+    let local = MemberLocalState::restore(&local.snapshot().unwrap()).unwrap();
     assert_eq!(local.identities().count(), 2);
     assert_eq!(group.membership(GAME), Some(queued));
     assert!(!local.may_present(queued, &group));
@@ -141,17 +141,17 @@ fn objections_and_abstentions_do_not_approve() {
 
 #[test]
 fn identity_collection_grows_and_restores_with_duplicate_labels() {
-    let mut local = LocalInstallation::default();
+    let mut local = MemberLocalState::default();
     for number in 0..2048 {
         assert!(local.add_identity(Identity(number), "Bob".into()));
     }
-    let restored = LocalInstallation::restore(&local.snapshot().unwrap()).unwrap();
+    let restored = MemberLocalState::restore(&local.snapshot().unwrap()).unwrap();
     assert!(local.identities().eq(restored.identities()));
 }
 
 #[test]
 fn departing_member_is_gated_locally_and_applied_intents_are_pruned() {
-    let mut local = LocalInstallation::default();
+    let mut local = MemberLocalState::default();
     local.add_identity(GAME, "Bob".into());
     let mut group = Group::new(1, [GAME, PRIVATE, PEER], Policy::Unanimous);
     let leaving = group.membership(GAME).unwrap();
@@ -170,7 +170,7 @@ fn departing_member_is_gated_locally_and_applied_intents_are_pruned() {
     assert!(!local.may_present(leaving, &lagging_view));
     // An unapplied intent for a current tenure is kept.
     let private = group.membership(PRIVATE).unwrap();
-    let mut other = LocalInstallation::default();
+    let mut other = MemberLocalState::default();
     other.add_identity(PRIVATE, "p".into());
     other.leave(private).unwrap();
     other.prune_departures(&group);
@@ -183,7 +183,7 @@ fn legacy_departure_stays_hidden_before_and_after_pruning() {
     let member = group.membership(GAME).unwrap();
     let legacy =
         br#"{"identities":{"1":"Bob"},"departures":[{"group":1,"identity":1,"joined_at":0}]}"#;
-    let mut local = LocalInstallation::restore(legacy).unwrap();
+    let mut local = MemberLocalState::restore(legacy).unwrap();
     assert!(!local.may_present(member, &group));
     assert!(!local.may_vote(member, &group));
     assert!(group.apply_departure(member).unwrap());
@@ -191,7 +191,7 @@ fn legacy_departure_stays_hidden_before_and_after_pruning() {
     assert_eq!(local.departure_intents().count(), 0);
 
     let lagging = Group::new(1, [GAME], Policy::InviterOnly);
-    let restored = LocalInstallation::restore(&local.snapshot().unwrap()).unwrap();
+    let restored = MemberLocalState::restore(&local.snapshot().unwrap()).unwrap();
     assert!(!restored.may_present(member, &lagging));
 }
 
@@ -204,7 +204,7 @@ fn roster_from_before_join_cannot_prune_pending_departure() {
     group.admit(&invite).unwrap();
     let member = group.membership(GAME).unwrap();
 
-    let mut local = LocalInstallation::default();
+    let mut local = MemberLocalState::default();
     local.add_identity(GAME, "Bob".into());
     local.leave(member).unwrap();
     local.prune_departures(&view_before_join);

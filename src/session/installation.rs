@@ -210,9 +210,11 @@ pub enum Error {
     SelectedIdentity,
     CeremonyActive,
     StaleCeremony,
-    InvalidContactGroup,
+    InvalidContactLink,
     /// A roster signature that would contradict a prior vote or a retired parent.
     ConflictingRosterVote,
+    /// Roster lock table has reached MAX_ROSTER_LOCKS capacity.
+    RosterLockCapacityExceeded,
     RosterSigningStateUnconfirmed,
     InvalidRosterCheckpoint,
     RosterCheckpointWriteFailed,
@@ -252,8 +254,9 @@ impl std::fmt::Display for Error {
             Self::SelectedIdentity => write!(f, "cannot operate on selected identity"),
             Self::CeremonyActive => write!(f, "ceremony already active"),
             Self::StaleCeremony => write!(f, "stale ceremony handle"),
-            Self::InvalidContactGroup => write!(f, "invalid contact group"),
+            Self::InvalidContactLink => write!(f, "invalid contact link"),
             Self::ConflictingRosterVote => write!(f, "conflicting roster vote"),
+            Self::RosterLockCapacityExceeded => write!(f, "roster lock capacity exceeded"),
             Self::RosterSigningStateUnconfirmed => write!(f, "roster signing state unconfirmed"),
             Self::InvalidRosterCheckpoint => write!(f, "invalid roster checkpoint"),
             Self::RosterCheckpointWriteFailed => write!(f, "roster checkpoint write failed"),
@@ -292,9 +295,6 @@ pub struct LinkedPersonContacts {
     peers: BTreeSet<Identity>,
 }
 
-/// Legacy alias for [`LinkedPersonContacts`].
-pub type PersonGroup = LinkedPersonContacts;
-
 impl LinkedPersonContacts {
     pub fn local_identity(&self) -> Identity {
         self.local
@@ -316,7 +316,9 @@ pub struct InstallationSnapshot {
     contacts: BTreeMap<Identity, ContactStore>,
     policy: AttemptPolicyState,
     #[cfg(feature = "openpgp")]
-    openpgp_revocations: crate::openpgp::PeerRevocations,
+    pub openpgp_revocations: crate::openpgp::PeerRevocations,
+    #[cfg(not(feature = "openpgp"))]
+    pub(crate) openpgp_revocations: Option<cbor2::Value>,
     roster_locks: RosterLockTable,
     roster_signing_disabled: bool,
     /// Identities restored without independently current locks.
@@ -337,6 +339,8 @@ pub struct Installation {
     pub(crate) openpgp_preview: Option<crate::openpgp::PendingExport>,
     #[cfg(feature = "openpgp")]
     pub(crate) openpgp_revocations: crate::openpgp::PeerRevocations,
+    #[cfg(not(feature = "openpgp"))]
+    pub(crate) openpgp_revocations: Option<cbor2::Value>,
     roster_locks: std::sync::Mutex<RosterLockTable>,
     roster_signing_disabled: bool,
     /// Identities restored without independently current locks.
@@ -372,6 +376,8 @@ impl Installation {
             openpgp_preview: None,
             #[cfg(feature = "openpgp")]
             openpgp_revocations: Default::default(),
+            #[cfg(not(feature = "openpgp"))]
+            openpgp_revocations: None,
             roster_locks: Default::default(),
             roster_signing_disabled: false,
             roster_unconfirmed: BTreeSet::new(),
@@ -403,6 +409,8 @@ impl Installation {
             policy,
             #[cfg(feature = "openpgp")]
             openpgp_revocations: self.openpgp_revocations,
+            #[cfg(not(feature = "openpgp"))]
+            openpgp_revocations: self.openpgp_revocations,
             roster_locks: self
                 .roster_locks
                 .into_inner()
@@ -426,6 +434,8 @@ impl Installation {
             mut contacts,
             policy,
             #[cfg(feature = "openpgp")]
+            openpgp_revocations,
+            #[cfg(not(feature = "openpgp"))]
             openpgp_revocations,
             roster_locks,
             roster_signing_disabled,
@@ -472,6 +482,8 @@ impl Installation {
             #[cfg(feature = "openpgp")]
             openpgp_preview: None,
             #[cfg(feature = "openpgp")]
+            openpgp_revocations,
+            #[cfg(not(feature = "openpgp"))]
             openpgp_revocations,
             roster_locks: std::sync::Mutex::new(roster_locks),
             roster_signing_disabled,
@@ -526,7 +538,7 @@ impl Installation {
                 .get_mut()
                 .unwrap_or_else(|error| error.into_inner()),
             locks,
-        );
+        )?;
         installation.roster_signing_disabled |= conflict;
         Ok(installation)
     }
@@ -753,18 +765,9 @@ impl Installation {
         let contacts = self.contacts(local).ok_or(Error::UnknownIdentity)?;
         let peers: BTreeSet<_> = peers.into_iter().collect();
         if peers.len() < 2 || peers.iter().any(|peer| contacts.get(peer).is_none()) {
-            return Err(Error::InvalidContactGroup);
+            return Err(Error::InvalidContactLink);
         }
         Ok(LinkedPersonContacts { local, peers })
-    }
-
-    /// Legacy alias for [`Installation::linked_person_contacts`].
-    pub fn group_contacts(
-        &self,
-        local: Identity,
-        peers: impl IntoIterator<Item = Identity>,
-    ) -> Result<LinkedPersonContacts, Error> {
-        self.linked_person_contacts(local, peers)
     }
 
     fn expire(&mut self, now: u64) {
@@ -897,15 +900,39 @@ impl Installation {
             }
         }
         while self.total_seen_transcripts() >= crate::contact::MAX_SEEN_TRANSCRIPTS {
-            let mut evicted = false;
-            for persona in self.inactive.values_mut() {
-                if persona.contacts.evict_oldest_transcript() {
-                    evicted = true;
-                    break;
+            let current_time = self.current.contacts.oldest_transcript_time();
+            let mut oldest_inactive: Option<(Identity, u64)> = None;
+            for (id, persona) in &self.inactive {
+                if let Some(ts) = persona.contacts.oldest_transcript_time() {
+                    if oldest_inactive.is_none() || ts < oldest_inactive.unwrap().1 {
+                        oldest_inactive = Some((*id, ts));
+                    }
                 }
             }
-            if !evicted && !self.current.contacts.evict_oldest_transcript() {
-                break;
+
+            match (current_time, oldest_inactive) {
+                (Some(cur_ts), Some((inact_id, inact_ts))) => {
+                    if inact_ts <= cur_ts {
+                        self.inactive
+                            .get_mut(&inact_id)
+                            .unwrap()
+                            .contacts
+                            .evict_oldest_transcript();
+                    } else {
+                        self.current.contacts.evict_oldest_transcript();
+                    }
+                }
+                (Some(_), None) => {
+                    self.current.contacts.evict_oldest_transcript();
+                }
+                (None, Some((inact_id, _))) => {
+                    self.inactive
+                        .get_mut(&inact_id)
+                        .unwrap()
+                        .contacts
+                        .evict_oldest_transcript();
+                }
+                (None, None) => break,
             }
         }
         let result = self
@@ -1263,7 +1290,7 @@ impl Installation {
         }
         let mut table = self.roster_locks.lock().unwrap_or_else(|e| e.into_inner());
         if table.len() >= roster_locks::MAX_ROSTER_LOCKS && !table.contains_key(&(group, parent)) {
-            return Err(Error::ConflictingRosterVote);
+            return Err(Error::RosterLockCapacityExceeded);
         }
         table.insert((group, parent), RosterParentLocks::Retired);
         Ok(())

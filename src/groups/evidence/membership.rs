@@ -6,7 +6,7 @@ use super::{
     Error, Installation, Key, RosterHistory, RosterVote, VouchedGroup, parse_verifying_key,
     random_id,
 };
-use crate::groups::{LocalInstallation, Membership, Policy};
+use crate::groups::{MemberLocalState, Membership, Policy};
 use crate::session::installation::{
     group_departure_message, group_ejection_message, group_rotation_message,
 };
@@ -465,7 +465,7 @@ impl VouchedGroup {
 
     pub fn sign_ejection_vote(
         &self,
-        local: &LocalInstallation,
+        local: &MemberLocalState,
         proposal: &RemovalProposal,
         voter: &Installation,
     ) -> Result<SignedEjectionVote, Error> {

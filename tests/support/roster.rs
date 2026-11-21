@@ -1,11 +1,11 @@
 use mesh_identity::groups::{
-    LocalInstallation,
+    MemberLocalState,
     evidence::{RosterCertificate, RosterVotePhase, VouchedGroup},
 };
 use mesh_identity::session::installation::Installation;
 
-pub fn local_for(group: &VouchedGroup, member: &Installation) -> LocalInstallation {
-    let mut local = LocalInstallation::default();
+pub fn local_for(group: &VouchedGroup, member: &Installation) -> MemberLocalState {
+    let mut local = MemberLocalState::default();
     let tenure = group.membership(member.selected()).unwrap();
     local.add_identity(tenure.identity(), "Member".into());
     local

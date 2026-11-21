@@ -389,8 +389,8 @@ fn recognized_with(mut g: VouchedGroup, statement: &TakeoverStatement) -> Vouche
     g
 }
 
-fn local_voter(g: &VouchedGroup) -> crate::groups::LocalInstallation {
-    let mut local = crate::groups::LocalInstallation::default();
+fn local_voter(g: &VouchedGroup) -> crate::groups::MemberLocalState {
+    let mut local = crate::groups::MemberLocalState::default();
     local.add_identity(g.membership(key(10)).unwrap().identity(), "owner".into());
     local
 }

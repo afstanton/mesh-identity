@@ -125,10 +125,14 @@ impl InstallationSnapshot {
         let openpgp_revocations = if self.openpgp_revocations.is_empty() {
             None
         } else {
-            Some(self.openpgp_revocations.to_wire())
+            Some(
+                self.openpgp_revocations
+                    .to_wire()
+                    .map_err(|_| SnapshotError::Invalid)?,
+            )
         };
         #[cfg(not(feature = "openpgp"))]
-        let openpgp_revocations = None;
+        let openpgp_revocations = self.openpgp_revocations.clone();
 
         let wire = SnapshotWire {
             version: SNAPSHOT_VERSION,
@@ -234,11 +238,15 @@ impl InstallationSnapshot {
                 .map_err(|_| SnapshotError::Invalid)?,
             None => Default::default(),
         };
+        #[cfg(not(feature = "openpgp"))]
+        let openpgp_revocations = wire.openpgp_revocations;
         Ok(Self {
             selected: wire.selected,
             contacts,
             policy: wire.policy,
             #[cfg(feature = "openpgp")]
+            openpgp_revocations,
+            #[cfg(not(feature = "openpgp"))]
             openpgp_revocations,
             roster_locks: wire.roster_locks,
             roster_signing_disabled: wire.roster_signing_disabled,
@@ -270,6 +278,8 @@ impl super::Installation {
             contacts,
             policy: self.current.contacts.attempt_policy_state(),
             #[cfg(feature = "openpgp")]
+            openpgp_revocations: self.openpgp_revocations.clone(),
+            #[cfg(not(feature = "openpgp"))]
             openpgp_revocations: self.openpgp_revocations.clone(),
             roster_locks: self
                 .roster_locks

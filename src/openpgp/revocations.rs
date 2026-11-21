@@ -11,6 +11,10 @@ use std::collections::{HashMap, VecDeque};
 pub(crate) const MAX_UNKNOWN_CERTIFICATES: usize = 256;
 pub(crate) const MAX_PROTECTED_CERTIFICATES: usize = 256;
 pub(crate) const MAX_SIGNATURES_PER_CERTIFICATE: usize = 16;
+/// Maximum serialized bytes for a single revocation signature packet.
+pub const MAX_REVOCATION_SIGNATURE_BYTES: usize = 2048;
+/// Maximum aggregate bytes for all revocation signatures in the snapshot wire.
+pub const MAX_REVOCATIONS_WIRE_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RevocationEntryWire {
@@ -27,6 +31,46 @@ pub struct PeerRevocationsWire {
 }
 
 type Remembered = Option<Vec<Signature>>;
+
+fn serialize_entry(
+    fp: &Fingerprint,
+    rem: &Remembered,
+    total_sig_bytes: &mut usize,
+) -> Result<RevocationEntryWire, ImportError> {
+    let version = match fp.version() {
+        Some(pgp::types::KeyVersion::V2) => 2,
+        Some(pgp::types::KeyVersion::V3) => 3,
+        Some(pgp::types::KeyVersion::V4) => 4,
+        Some(pgp::types::KeyVersion::V5) => 5,
+        Some(pgp::types::KeyVersion::V6) => 6,
+        _ => return Err(ImportError::InvalidBinding),
+    };
+    let signatures = match rem {
+        None => None,
+        Some(sigs) => {
+            let mut out = Vec::with_capacity(sigs.len());
+            for s in sigs {
+                let bytes = DetachedSignature::new(s.clone())
+                    .to_bytes()
+                    .map_err(|_| ImportError::InvalidBinding)?;
+                if bytes.len() > MAX_REVOCATION_SIGNATURE_BYTES {
+                    return Err(ImportError::RevocationCapacity);
+                }
+                *total_sig_bytes = total_sig_bytes.saturating_add(bytes.len());
+                if *total_sig_bytes > MAX_REVOCATIONS_WIRE_BYTES {
+                    return Err(ImportError::RevocationCapacity);
+                }
+                out.push(serde_bytes::ByteBuf::from(bytes));
+            }
+            Some(out)
+        }
+    };
+    Ok(RevocationEntryWire {
+        version,
+        fingerprint: fp.as_bytes().to_vec(),
+        signatures,
+    })
+}
 
 fn signatures_match(a: &Signature, b: &Signature) -> bool {
     if let (Some(sig_a), Some(sig_b)) = (a.signature(), b.signature()) {
@@ -53,64 +97,22 @@ impl PeerRevocations {
         self.protected.is_empty() && self.unknown.is_empty()
     }
 
-    pub fn to_wire(&self) -> PeerRevocationsWire {
-        let mut protected: Vec<RevocationEntryWire> = self
-            .protected
-            .iter()
-            .map(|(fp, rem)| RevocationEntryWire {
-                version: match fp.version() {
-                    Some(pgp::types::KeyVersion::V2) => 2,
-                    Some(pgp::types::KeyVersion::V3) => 3,
-                    Some(pgp::types::KeyVersion::V4) => 4,
-                    Some(pgp::types::KeyVersion::V5) => 5,
-                    Some(pgp::types::KeyVersion::V6) => 6,
-                    _ => 4,
-                },
-                fingerprint: fp.as_bytes().to_vec(),
-                signatures: rem.as_ref().map(|sigs| {
-                    sigs.iter()
-                        .filter_map(|s| {
-                            DetachedSignature::new(s.clone())
-                                .to_bytes()
-                                .ok()
-                                .map(serde_bytes::ByteBuf::from)
-                        })
-                        .collect()
-                }),
-            })
-            .collect();
+    pub fn to_wire(&self) -> Result<PeerRevocationsWire, ImportError> {
+        let mut total_sig_bytes = 0usize;
+        let mut protected: Vec<RevocationEntryWire> = Vec::with_capacity(self.protected.len());
+        for (fp, rem) in &self.protected {
+            protected.push(serialize_entry(fp, rem, &mut total_sig_bytes)?);
+        }
         protected.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
 
-        let unknown: Vec<RevocationEntryWire> = self
-            .unknown_order
-            .iter()
-            .filter_map(|fp| {
-                let rem = self.unknown.get(fp)?;
-                Some(RevocationEntryWire {
-                    version: match fp.version() {
-                        Some(pgp::types::KeyVersion::V2) => 2,
-                        Some(pgp::types::KeyVersion::V3) => 3,
-                        Some(pgp::types::KeyVersion::V4) => 4,
-                        Some(pgp::types::KeyVersion::V5) => 5,
-                        Some(pgp::types::KeyVersion::V6) => 6,
-                        _ => 4,
-                    },
-                    fingerprint: fp.as_bytes().to_vec(),
-                    signatures: rem.as_ref().map(|sigs| {
-                        sigs.iter()
-                            .filter_map(|s| {
-                                DetachedSignature::new(s.clone())
-                                    .to_bytes()
-                                    .ok()
-                                    .map(serde_bytes::ByteBuf::from)
-                            })
-                            .collect()
-                    }),
-                })
-            })
-            .collect();
+        let mut unknown: Vec<RevocationEntryWire> = Vec::with_capacity(self.unknown_order.len());
+        for fp in &self.unknown_order {
+            if let Some(rem) = self.unknown.get(fp) {
+                unknown.push(serialize_entry(fp, rem, &mut total_sig_bytes)?);
+            }
+        }
 
-        PeerRevocationsWire { protected, unknown }
+        Ok(PeerRevocationsWire { protected, unknown })
     }
 
     pub fn from_wire(wire: PeerRevocationsWire) -> Result<Self, ImportError> {
@@ -119,8 +121,9 @@ impl PeerRevocations {
         {
             return Err(ImportError::RevocationCapacity);
         }
+        let mut total_sig_bytes = 0usize;
 
-        let parse_entry =
+        let mut parse_entry =
             |entry: RevocationEntryWire| -> Result<(Fingerprint, Remembered), ImportError> {
                 let version = match entry.version {
                     2 => pgp::types::KeyVersion::V2,
@@ -140,6 +143,13 @@ impl PeerRevocations {
                         }
                         let mut sigs = Vec::with_capacity(sigs_bytes.len());
                         for b in sigs_bytes {
+                            if b.len() > MAX_REVOCATION_SIGNATURE_BYTES {
+                                return Err(ImportError::RevocationCapacity);
+                            }
+                            total_sig_bytes = total_sig_bytes.saturating_add(b.len());
+                            if total_sig_bytes > MAX_REVOCATIONS_WIRE_BYTES {
+                                return Err(ImportError::RevocationCapacity);
+                            }
                             let detached = DetachedSignature::from_bytes(&b[..])
                                 .map_err(|_| ImportError::InvalidBinding)?;
                             sigs.push(detached.signature);
@@ -296,9 +306,16 @@ pub(super) fn remember_certificate_revocations(
 ) -> Result<usize, ImportError> {
     let mut revoked = Vec::new();
 
+    let valid_and_bounded = |sig: &Signature| -> bool {
+        DetachedSignature::new(sig.clone())
+            .to_bytes()
+            .is_ok_and(|b| b.len() <= MAX_REVOCATION_SIGNATURE_BYTES)
+    };
+
     // 1. Primary key revocations
     for sig in &cert.details.revocation_signatures {
         if sig.typ() == Some(SignatureType::KeyRevocation)
+            && valid_and_bounded(sig)
             && sig.verify_key(&cert.primary_key).is_ok()
         {
             revoked.push(sig.clone());
@@ -309,6 +326,7 @@ pub(super) fn remember_certificate_revocations(
     for user in &cert.details.users {
         for sig in &user.signatures {
             if sig.typ() == Some(SignatureType::CertRevocation)
+                && valid_and_bounded(sig)
                 && sig
                     .verify_certification(&cert.primary_key, Tag::UserId, &user.id)
                     .is_ok()
@@ -322,6 +340,7 @@ pub(super) fn remember_certificate_revocations(
     for subkey in &cert.public_subkeys {
         for sig in &subkey.signatures {
             if sig.typ() == Some(SignatureType::SubkeyRevocation)
+                && valid_and_bounded(sig)
                 && sig
                     .verify_subkey_binding(&cert.primary_key, &subkey.key)
                     .is_ok()

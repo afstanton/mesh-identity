@@ -5,7 +5,7 @@ mod support;
 
 use ed25519_dalek::SigningKey;
 use mesh_identity::groups::{
-    Error, Group, LocalInstallation, Policy, Vote,
+    Error, Group, MemberLocalState, Policy, Vote,
     evidence::{CatchUp, SignedDeparture, VouchedGroup},
 };
 use std::fs::{self, File};
@@ -27,7 +27,7 @@ impl CheckpointDir {
         Self(path)
     }
 
-    fn save(&self, installation: &LocalInstallation, departure: Option<&[u8; 136]>) -> PathBuf {
+    fn save(&self, installation: &MemberLocalState, departure: Option<&[u8; 136]>) -> PathBuf {
         let staged = self.0.join("installation.pending");
         let published = self.0.join("installation.json");
         let mut file = File::create(&staged).unwrap();
@@ -78,7 +78,7 @@ fn roster_vote_is_retried_from_the_transaction_after_send_before_acknowledgement
     let alternative = [3; 32];
     let statement = group_roster_vote_message(group, parent, child, 1, 2);
     let outbound = |vote: &[u8]| [statement.as_slice(), vote].concat();
-    let mut local = LocalInstallation::default();
+    let mut local = MemberLocalState::default();
     local.add_identity(
         roster.membership(signer.selected()).unwrap().identity(),
         "Voter".into(),
@@ -203,12 +203,9 @@ fn roster_vote_is_retried_when_selected_identity_changed_and_preserves_retired_p
     );
 }
 
-fn restore(path: &Path) -> (LocalInstallation, Option<Vec<u8>>) {
+fn restore(path: &Path) -> (MemberLocalState, Option<Vec<u8>>) {
     let (installation, departure) = read_checkpoint(path);
-    (
-        LocalInstallation::restore(&installation).unwrap(),
-        departure,
-    )
+    (MemberLocalState::restore(&installation).unwrap(), departure)
 }
 
 #[test]
@@ -222,7 +219,7 @@ fn restart_after_checkpoint_before_send_retries_without_showing_messages() {
     let mut inbox = Inbox::default();
 
     let checkpoint = {
-        let mut local = LocalInstallation::default();
+        let mut local = MemberLocalState::default();
         local.add_identity(membership.identity(), "Alice".into());
         inbox.deliver(&stale, &local, &s.alice, membership, sender);
         assert_eq!(inbox, Inbox::one_message());
@@ -277,7 +274,7 @@ fn removing_an_identity_keeps_its_signed_departure_but_cancels_pending_disclosur
     let stale = group.clone();
     let removed_tenure = group.membership(removed).unwrap();
     let retained_tenure = group.membership(retained).unwrap();
-    let mut local = LocalInstallation::default();
+    let mut local = MemberLocalState::default();
     local.add_identity(removed_tenure.identity(), "Removed".into());
     local.add_identity(retained_tenure.identity(), "Retained".into());
     s.alice.select(removed, 1).unwrap();
@@ -322,7 +319,7 @@ fn an_older_device_backup_needs_roster_catch_up_before_resuming() {
     let alice = s.alice.selected();
     let tenure = s.group.membership(alice).unwrap();
     let sender = s.dave.selected();
-    let mut local = LocalInstallation::default();
+    let mut local = MemberLocalState::default();
     local.add_identity(tenure.identity(), "Alice".into());
     let checkpoints = CheckpointDir::new();
     let backup = checkpoints.save(&local, None);
@@ -333,7 +330,7 @@ fn an_older_device_backup_needs_roster_catch_up_before_resuming() {
         SignedDeparture::new(s.group.departure_context(alice).unwrap(), &s.alice).unwrap();
     assert!(s.group.apply_departure_message(&departure).unwrap());
     let (bytes, _) = read_checkpoint(&backup);
-    let mut restored = LocalInstallation::restore_backup(&bytes).unwrap();
+    let mut restored = MemberLocalState::restore_backup(&bytes).unwrap();
     let stale_invitation = restored_roster.invite(alice, s.bob.selected()).unwrap();
     assert!(!restored_roster.may_present(&restored, alice, tenure));
     assert!(
@@ -381,9 +378,9 @@ fn an_older_device_backup_needs_roster_catch_up_before_resuming() {
             .is_ok()
     );
     let checkpoint = restored.snapshot().unwrap();
-    let restarted = LocalInstallation::restore(&checkpoint).unwrap();
+    let restarted = MemberLocalState::restore(&checkpoint).unwrap();
     assert!(other.may_present(&restarted, alice, other_tenure));
-    let copied = LocalInstallation::restore_backup(&checkpoint).unwrap();
+    let copied = MemberLocalState::restore_backup(&checkpoint).unwrap();
     assert!(!other.may_present(&copied, alice, other_tenure));
 
     let fork = VouchedGroup::new(2, [alice, sender], Policy::InviterOnly);
@@ -452,13 +449,13 @@ fn restored_member_reconciles_with_a_quorum_and_signs_only_for_the_active_roster
 
     let active_local = |group: &VouchedGroup, member: &Installation| {
         let tenure = group.membership(member.selected()).unwrap();
-        let mut local = LocalInstallation::default();
+        let mut local = MemberLocalState::default();
         local.add_identity(tenure.identity(), "Member".into());
         local
     };
     let mut restored_roster = current.clone();
     let checkpoint = active_local(&current, &s.alice).snapshot().unwrap();
-    let mut restored = LocalInstallation::restore_backup(&checkpoint).unwrap();
+    let mut restored = MemberLocalState::restore_backup(&checkpoint).unwrap();
     let tenure = current.membership(alice).unwrap();
     let departure =
         SignedDeparture::new(current.departure_context(carol).unwrap(), &s.carol).unwrap();
@@ -688,7 +685,7 @@ fn same_head_reconciliation_cannot_recover_lost_roster_signing_locks() {
     ];
     let group = VouchedGroup::new(156, roster_keys, Policy::InviterOnly);
     let local_for = |member: &Installation| {
-        let mut local = LocalInstallation::default();
+        let mut local = MemberLocalState::default();
         let tenure = group.membership(member.selected()).unwrap();
         local.add_identity(tenure.identity(), "Member".into());
         local
@@ -715,7 +712,7 @@ fn same_head_reconciliation_cannot_recover_lost_roster_signing_locks() {
         )
         .unwrap();
 
-    let mut restored = LocalInstallation::restore_backup(&local_checkpoint).unwrap();
+    let mut restored = MemberLocalState::restore_backup(&local_checkpoint).unwrap();
     let voter = Installation::restore_backup(old_signing_checkpoint, [key.clone()]).unwrap();
     let now = Instant::now();
     let challenge = RosterFreshnessChallenge::new(group_id, now);
@@ -773,7 +770,7 @@ fn small_group_without_a_required_signer_can_start_an_independent_group() {
         );
         let original_tenure = original.membership(lost_key).unwrap();
         let local_for = |group: &VouchedGroup, signer: &Installation| {
-            let mut local = LocalInstallation::default();
+            let mut local = MemberLocalState::default();
             let tenure = group.membership(signer.selected()).unwrap();
             local.add_identity(tenure.identity(), "Member".into());
             local
@@ -786,7 +783,7 @@ fn small_group_without_a_required_signer_can_start_an_independent_group() {
         let checkpoint = local_for(&original, &lost).snapshot().unwrap();
         let key_checkpoint = lost.into_snapshot(0);
         let restored_signer = Installation::restore_backup(key_checkpoint, [key]).unwrap();
-        let mut restored = LocalInstallation::restore_backup(&checkpoint).unwrap();
+        let mut restored = MemberLocalState::restore_backup(&checkpoint).unwrap();
         let mut old_view = original.clone();
         let now = Instant::now();
         let challenge = RosterFreshnessChallenge::new(154, now);

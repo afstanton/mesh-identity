@@ -125,7 +125,7 @@ pub struct ContactStore {
     contacts: HashMap<[u8; 32], ContactRecordV1>,
     /// Every transcript digest ever recorded (bounded at MAX_SEEN_TRANSCRIPTS, evicting oldest).
     seen_transcripts: HashSet<[u8; 32]>,
-    seen_order: VecDeque<[u8; 32]>,
+    seen_order: VecDeque<(u64, [u8; 32])>,
     attempt_policy: AttemptPolicyState,
 }
 
@@ -152,7 +152,7 @@ impl ContactStore {
     pub(crate) fn to_wire(&self) -> ContactStoreWire {
         let mut contacts: Vec<_> = self.contacts.values().cloned().collect();
         contacts.sort_by_key(|record| record.peer_ed25519_pk);
-        let seen_transcripts: Vec<_> = self.seen_order.iter().copied().collect();
+        let seen_transcripts: Vec<_> = self.seen_order.iter().map(|(_, t)| *t).collect();
         ContactStoreWire {
             local_identity: self.local_identity_pk,
             contacts,
@@ -192,11 +192,11 @@ impl ContactStore {
                 return Err(StoreError::InvalidKey);
             }
         }
-        for transcript in wire.seen_transcripts {
+        for (idx, transcript) in wire.seen_transcripts.into_iter().enumerate() {
             if !store.seen_transcripts.insert(transcript) {
                 return Err(StoreError::InvalidKey);
             }
-            store.seen_order.push_back(transcript);
+            store.seen_order.push_back((idx as u64, transcript));
         }
         store.attempt_policy = wire.attempt_policy;
         Ok(store)
@@ -216,12 +216,16 @@ impl ContactStore {
         self.attempt_policy
     }
 
-    pub fn seen_transcripts_len(&self) -> usize {
+    pub(crate) fn seen_transcripts_len(&self) -> usize {
         self.seen_transcripts.len()
     }
 
-    pub fn evict_oldest_transcript(&mut self) -> bool {
-        if let Some(oldest) = self.seen_order.pop_front() {
+    pub(crate) fn oldest_transcript_time(&self) -> Option<u64> {
+        self.seen_order.front().map(|(ts, _)| *ts)
+    }
+
+    pub(crate) fn evict_oldest_transcript(&mut self) -> bool {
+        if let Some((_, oldest)) = self.seen_order.pop_front() {
             self.seen_transcripts.remove(&oldest);
             true
         } else {
@@ -279,9 +283,9 @@ impl ContactStore {
             return Err(StoreError::StoreFull);
         }
         if self.seen_transcripts.insert(transcript) {
-            self.seen_order.push_back(transcript);
+            self.seen_order.push_back((timestamp, transcript));
             if self.seen_order.len() > MAX_SEEN_TRANSCRIPTS
-                && let Some(oldest) = self.seen_order.pop_front()
+                && let Some((_, oldest)) = self.seen_order.pop_front()
             {
                 self.seen_transcripts.remove(&oldest);
             }

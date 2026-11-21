@@ -748,7 +748,7 @@ impl Installation {
             .get_mut()
             .unwrap_or_else(|error| error.into_inner())
             .clone();
-        let conflict = roster_locks::merge_checkpoint(&mut table, incoming);
+        let conflict = roster_locks::merge_checkpoint(&mut table, incoming)?;
         let voting = VotingRecord {
             counter: bundle.counter,
             state: if conflict {
@@ -819,7 +819,7 @@ impl Installation {
                 .get_mut()
                 .unwrap_or_else(|e| e.into_inner()),
             record.locks,
-        );
+        )?;
         let mut unconfirmed = record.unconfirmed;
         for (identity, incoming) in record.voting {
             let current = installation.voting_record(identity);

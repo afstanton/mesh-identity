@@ -23,7 +23,7 @@ use crate::groups::evidence::{
     MAX_CERTIFICATE_SIGNERS, MAX_LIFETIME_MS, SignedAdmissionConsent, SignedDeparture,
     SignedInvitation, VouchedGroup,
 };
-use crate::groups::{LocalInstallation, Policy};
+use crate::groups::{MemberLocalState, Policy};
 
 mod forming;
 mod joining;
@@ -385,7 +385,7 @@ pub struct GroupHandle {
     staged: Vec<Item>,
     sent: BTreeMap<LocalBinding, Sent>,
     received: BTreeMap<LocalBinding, Received>,
-    local: LocalInstallation,
+    local: MemberLocalState,
     observed: BTreeMap<LocalBinding, Observed>,
     rounds: BTreeMap<LocalBinding, Round>,
     strays: Vec<Stray>,
@@ -413,7 +413,7 @@ impl GroupHandle {
             staged: Vec::new(),
             sent: BTreeMap::new(),
             received: BTreeMap::new(),
-            local: LocalInstallation::default(),
+            local: MemberLocalState::default(),
             observed: BTreeMap::new(),
             rounds: BTreeMap::new(),
             strays: Vec::new(),
@@ -1500,7 +1500,7 @@ impl GroupHandle {
         {
             return Err(HandleError::TooLarge);
         }
-        let local: LocalInstallation =
+        let local: MemberLocalState =
             serde_json::from_slice(&wire.local).map_err(|_| HandleError::Malformed)?;
         let mut observed = BTreeMap::new();
         for (scope, record) in wire.observed {

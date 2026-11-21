@@ -5,7 +5,7 @@ use super::{
     Error, Installation, Key, RosterHistory, VouchedGroup, parse_verifying_key, random_id,
     verified_contact,
 };
-use crate::groups::LocalInstallation;
+use crate::groups::MemberLocalState;
 use crate::session::installation::{group_recovery_enrollment_message, group_recovery_message};
 use ed25519_dalek::Signature;
 use sha2::{Digest, Sha256};
@@ -296,7 +296,7 @@ impl SignedRecoveryDecision {
 impl VouchedGroup {
     pub fn sign_recovery_approval(
         &self,
-        local: &LocalInstallation,
+        local: &MemberLocalState,
         request: &RecoveryRequest,
         witness: &Installation,
     ) -> Result<SignedRecoveryDecision, Error> {
@@ -306,7 +306,7 @@ impl VouchedGroup {
 
     pub fn sign_recovery_veto(
         &self,
-        local: &LocalInstallation,
+        local: &MemberLocalState,
         request: &RecoveryRequest,
         holder: &Installation,
     ) -> Result<SignedRecoveryDecision, Error> {

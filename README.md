@@ -63,16 +63,16 @@ Requires Rust edition 2024.
 # Build core library
 cargo build
 
-# Run core test suite (107 tests)
+# Run core test suite (109 tests)
 cargo test
 
-# Test with OpenPGP interoperability enabled (107 tests, including 18 import/export integration tests)
+# Test with OpenPGP interoperability enabled (127 tests, including 18 import/export integration tests)
 cargo test --features openpgp
 
-# Build and test with group admission enabled (243 tests)
+# Build and test with group admission enabled (379 tests)
 cargo test --features groups
 
-# Run full test matrix with all features and strict warnings denied (532 tests)
+# Run full test matrix with all features and strict warnings denied (544 tests)
 cargo test --all-features
 cargo clippy --all-targets --all-features -- -D warnings
 ```

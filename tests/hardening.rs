@@ -661,7 +661,7 @@ fn full_invitation_inbox_still_admits_an_honest_inviter() {
 #[test]
 fn a_restored_three_member_group_can_be_reconciled_with_every_member_answering() {
     use ed25519_dalek::SigningKey;
-    use mesh_identity::groups::LocalInstallation;
+    use mesh_identity::groups::MemberLocalState;
     use mesh_identity::session::installation::Installation;
     use rand::{SeedableRng, rngs::StdRng};
     use std::time::Instant;
@@ -672,7 +672,7 @@ fn a_restored_three_member_group_can_be_reconciled_with_every_member_answering()
     let group = VouchedGroup::new(1, members.iter().map(|m| m.selected()), Policy::Majority);
     let (group_id, _) = group.rotation_context();
     let local_for = |m: &Installation| {
-        let mut local = LocalInstallation::default();
+        let mut local = MemberLocalState::default();
         local.add_identity(
             group.membership(m.selected()).unwrap().identity(),
             "m".into(),
@@ -699,7 +699,7 @@ fn a_restored_three_member_group_can_be_reconciled_with_every_member_answering()
     );
 
     let mut backup =
-        LocalInstallation::restore_backup(&local_for(&members[0]).snapshot().unwrap()).unwrap();
+        MemberLocalState::restore_backup(&local_for(&members[0]).snapshot().unwrap()).unwrap();
     let tenure = group.membership(members[0].selected()).unwrap();
     assert!(!group.may_present(&backup, members[0].selected(), tenure));
     let mut view = group.clone();

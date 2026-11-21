@@ -34,7 +34,10 @@ pub(super) type RosterLockTable = BTreeMap<Parent, RosterParentLocks>;
 
 /// Merge all known state. Report conflicting signatures without discarding
 /// any locks on the remaining parents or identities.
-pub(super) fn merge_checkpoint(current: &mut RosterLockTable, incoming: RosterLockTable) -> bool {
+pub(super) fn merge_checkpoint(
+    current: &mut RosterLockTable,
+    incoming: RosterLockTable,
+) -> Result<bool, Error> {
     let mut conflict = false;
     for (parent, incoming) in incoming {
         if let Some(existing) = current.get_mut(&parent) {
@@ -42,10 +45,10 @@ pub(super) fn merge_checkpoint(current: &mut RosterLockTable, incoming: RosterLo
         } else if current.len() < MAX_ROSTER_LOCKS {
             current.insert(parent, incoming);
         } else {
-            conflict = true;
+            return Err(Error::RosterLockCapacityExceeded);
         }
     }
-    conflict
+    Ok(conflict)
 }
 
 impl RosterParentLocks {
@@ -111,7 +114,7 @@ pub(super) fn record_vote(
         return Err(Error::ConflictingRosterVote);
     }
     if table.len() >= MAX_ROSTER_LOCKS && !table.contains_key(&parent) {
-        return Err(Error::ConflictingRosterVote);
+        return Err(Error::RosterLockCapacityExceeded);
     }
     let RosterParentLocks::Active(identities) = table.entry(parent).or_default() else {
         return Err(Error::ConflictingRosterVote);

@@ -2,7 +2,7 @@
 //! The public API groups signed evidence and authenticated roster transitions.
 
 use crate::contact::ContactStatus;
-use crate::groups::{BackupRoster, Error, Group, LocalInstallation, Membership, Policy};
+use crate::groups::{BackupRoster, Error, Group, MemberLocalState, Membership, Policy};
 use crate::session::installation::{Identity as Key, Installation};
 use ed25519_dalek::VerifyingKey;
 use rand::{RngCore, rngs::OsRng};
@@ -452,13 +452,13 @@ impl VouchedGroup {
             .collect())
     }
 
-    pub fn prune_departures(&self, local: &mut LocalInstallation) {
+    pub fn prune_departures(&self, local: &mut MemberLocalState) {
         local.prune_departures(&self.group);
     }
 
     pub fn may_present(
         &self,
-        local: &LocalInstallation,
+        local: &MemberLocalState,
         recipient: Key,
         tenure: Membership,
     ) -> bool {
@@ -482,7 +482,7 @@ impl VouchedGroup {
     }
 
     /// Whether the backup restore gate permits this roster for this group.
-    pub fn backup_roster_confirmed(&self, local: &LocalInstallation) -> bool {
+    pub fn backup_roster_confirmed(&self, local: &MemberLocalState) -> bool {
         local.backup_rosters.as_ref().is_none_or(|groups| {
             groups
                 .get(&self.group.id)
@@ -497,7 +497,7 @@ impl VouchedGroup {
     #[cfg(any(test, feature = "test-support"))]
     pub fn reconcile_backup(
         &mut self,
-        local: &mut LocalInstallation,
+        local: &mut MemberLocalState,
         trusted_current: &Self,
     ) -> CatchUp {
         self.reconcile_backup_unchecked(local, trusted_current)
@@ -505,7 +505,7 @@ impl VouchedGroup {
 
     fn reconcile_backup_unchecked(
         &mut self,
-        local: &mut LocalInstallation,
+        local: &mut MemberLocalState,
         trusted_current: &Self,
     ) -> CatchUp {
         if let Some(confirmed) = local
@@ -534,7 +534,7 @@ impl VouchedGroup {
 
     fn check_local_voter(
         &self,
-        local: &LocalInstallation,
+        local: &MemberLocalState,
         voter: &Installation,
     ) -> Result<Key, Error> {
         let key = voter.selected();
@@ -551,7 +551,7 @@ impl VouchedGroup {
     /// recipient's current view. Blocking is private to the selected identity.
     pub fn may_present_from(
         &self,
-        local: &LocalInstallation,
+        local: &MemberLocalState,
         recipient: &Installation,
         tenure: Membership,
         sender: Key,

@@ -65,7 +65,9 @@ fn encounters_are_separate_and_private_grouping_preserves_continuity() {
         [game, private].map(|key| contacts.export_contact(&key, Some("Bob".into())).unwrap())
     };
     let before = export(&alice);
-    let group = alice.group_contacts(alice_key, [game, private]).unwrap();
+    let group = alice
+        .linked_person_contacts(alice_key, [game, private])
+        .unwrap();
     assert_eq!(group.peers().count(), 2);
     let grouped = export(&alice);
     assert_eq!(grouped, before);
@@ -686,7 +688,7 @@ fn test_roster_lock_ceiling_enforced_on_retirement_and_saves_cleanly() {
     overflow_parent[0..4].copy_from_slice(&8192u32.to_be_bytes());
     assert_eq!(
         inst.retire_roster_parent(1, overflow_parent, head).err(),
-        Some(Error::ConflictingRosterVote)
+        Some(Error::RosterLockCapacityExceeded)
     );
 
     // Save and restore must succeed with the exactly capped table

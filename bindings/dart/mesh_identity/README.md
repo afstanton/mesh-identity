@@ -13,6 +13,7 @@ Built using **Dart Native Assets** (`dart:ffi`), compiling the native Rust engin
 - **Durable Snapshots**: Byte-for-byte deterministic serialization and authenticated checkpoint restoration.
 - **Contact Management**: Private local contact records, peer public key importation, and administrative blocking.
 - **Device-to-Device Handoff**: Monotonic voting role migration, voter lock transfer, gating, and signed takeover statements across physical devices.
+- **Byzantine Group Admission & Governance**: Multi-party group formation, verified contact invitations, vouchers, two-phase commit outbox staging (`save` / `confirmSaved` / `takeOutgoing`), and consensus leave workflows.
 - **Memory Safety & Zeroization**: Native panics are caught at the FFI boundary, pointers and lengths are strictly bounded before allocation, and native memory buffers for seeds are securely zeroized upon release. (Callers are responsible for zeroizing their own `Uint8List` seed copies with `fillRange(0, 32, 0)` when no longer needed.)
 - **Concurrency**: Instances wrap raw native pointers without internal locks; do not access the same `MeshInstallation` concurrently across multiple isolates.
 
@@ -160,6 +161,35 @@ assert(acceptResult.state == VotingState.voting);
 assert(newDevice.getVotingRecord().counter == handoff.bundle.counter);
 ```
 
+### 7. Byzantine Group Admission & Governance
+
+```dart
+// Transition an existing installation (with verified contacts) to a group handle
+final groupHandle = MeshGroupHandle.fromInstallation(installation);
+
+// Form a new Byzantine group
+final opId = groupHandle.createGroup();
+
+// Two-phase commit outbox staging:
+// 1. Save the snapshot blob to durable storage
+final saveResult = groupHandle.save();
+await secureStorage.write('group_snapshot', saveResult.blob);
+
+// 2. Confirm durability to release staged frames and receive events
+final events = groupHandle.confirmSaved(saveResult.token);
+final createdEvent = events.whereType<GroupCreatedEvent>().first;
+final groupId = createdEvent.groupId;
+
+// 3. Drain and send outgoing frames over the network
+final outgoingMessages = groupHandle.takeOutgoing();
+for (final msg in outgoingMessages) {
+  await networkTransport.send(to: msg.to, tag: msg.tag, bytes: msg.bytes);
+}
+
+// Invite a verified contact candidate to the group
+groupHandle.invite(groupId: groupId, candidateKey: verifiedContactKey);
+```
+
 ---
 
 ## Roadmap
@@ -168,7 +198,7 @@ This package is being built in verified, incremental slices:
 - [x] **Slice 1**: Installation lifecycle, personas, snapshots, contact store, and defensive C-FFI boundary.
 - [x] **Slice 2**: Cryptographic Encounter protocol (initiator / responder, SAS verification, QR transport).
 - [x] **Slice 3**: Device-to-device handoff (identity migration and voter lock transfer).
-- [ ] **Slice 4**: Byzantine group admission governance, voting ceremonies, and state machines.
+- [x] **Slice 4**: Byzantine group admission governance, voting ceremonies, and state machines.
 - [ ] **Slice 5**: OpenPGP cross-signing and trust bridging.
 
 ---

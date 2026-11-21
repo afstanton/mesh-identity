@@ -99,6 +99,20 @@ class MeshInstallation implements ffi.Finalizable {
     }
   }
 
+  /// Native handle used when transferring ownership to [MeshGroupHandle].
+  ffi.Pointer<ffi.Void> get handleForTransfer {
+    _checkDisposed();
+    return _handle;
+  }
+
+  /// Finalize transferring native handle ownership away from this installation.
+  ///
+  /// Call only after the recipient has successfully taken ownership of the handle.
+  void finalizeTransfer() {
+    _finalizer.detach(this);
+    _handle = ffi.nullptr;
+  }
+
   /// Explicitly release native resources held by this installation.
   void dispose() {
     if (!isDisposed) {

@@ -100,7 +100,7 @@ fn unique_set<K: Ord>(items: Vec<K>) -> Result<BTreeSet<K>, GroupSnapshotError> 
 }
 
 impl VouchedGroup {
-    pub(crate) fn member_keys(&self) -> Vec<Key> {
+    pub fn member_keys(&self) -> Vec<Key> {
         self.identities
             .keys()
             .copied()

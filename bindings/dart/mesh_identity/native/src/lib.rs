@@ -33,10 +33,19 @@ pub const MESH_ERR_WRONG_HANDOFF_RECIPIENT: i32 = -18;
 pub const MESH_ERR_COUNTER_EXHAUSTED: i32 = -19;
 pub const MESH_ERR_NOT_GATED: i32 = -20;
 pub const MESH_ERR_HANDOFF_WRITE_FAILED: i32 = -21;
+pub const MESH_ERR_UNSUPPORTED: i32 = -22;
+pub const MESH_ERR_INELIGIBLE: i32 = -23;
+pub const MESH_ERR_DUPLICATE_GROUP: i32 = -24;
+pub const MESH_ERR_TOO_LARGE: i32 = -25;
+pub const MESH_ERR_MALFORMED: i32 = -26;
+pub const MESH_ERR_FORMATION: i32 = -27;
 
 const MAX_SEEDS_CEILING: usize = 2048;
 const MAX_SNAPSHOT_BYTES: usize = 64 * 1024 * 1024; // 64 MiB
 const MAX_HANDOFF_BUNDLE_BYTES: usize = 5 * 1024 * 1024; // 5 MiB
+const MAX_GROUP_FRAME_BYTES: usize = 128 * 1024; // 128 KiB (matching core MAX_FRAME_BYTES)
+const MAX_GROUP_SNAPSHOT_BYTES: usize = 256 * 1024 * 1024; // 256 MiB (matching core MAX_HANDLE_BYTES)
+const MAX_GROUP_MEMBERS: usize = 192; // matching core MAX_MEMBERS
 
 thread_local! {
     static LAST_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
@@ -2026,6 +2035,1281 @@ pub unsafe extern "C" fn mesh_handoff_bundle_inspect(
             *out_json = c_str.into_raw();
         }
         MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        set_last_error("native panic caught at FFI boundary");
+        MESH_ERR_PANIC
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Slice 4: Byzantine Group Admission & Governance Handles
+// ---------------------------------------------------------------------------
+
+pub struct MeshGroupHandle {
+    pub group_handle: mesh_identity::groups::handle::GroupHandle,
+    pub is_poisoned: bool,
+}
+
+#[derive(Serialize)]
+struct GroupViewJson {
+    id: String,
+    revision: String,
+    policy: String,
+    members: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct OutgoingJson {
+    from: String,
+    to: Vec<String>,
+    tag: u8,
+    bytes: String,
+    authenticator: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PendingInvitationJson {
+    binding: String,
+    group: String,
+    inviter: String,
+}
+
+#[derive(Serialize)]
+struct OpStateJson {
+    status: String,
+    reason: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type")]
+enum EventJson {
+    GroupCreated { group: String },
+    GroupImported { group: String },
+    GroupFormed { group: String },
+    InvitationSent { op: String },
+    InvitationReceived { group: String, invitation: String },
+    AcceptanceSent { op: String },
+    ConsentReceived { op: String },
+    Admitted { op: String },
+    Joined { group: String },
+    MemberAdmitted { group: String, member: String },
+    Left { group: String },
+    MemberDeparted { group: String, member: String },
+    FrameRejected { reason: String },
+}
+
+fn event_to_json(e: &mesh_identity::groups::handle::Event) -> EventJson {
+    use mesh_identity::groups::handle::Event;
+    match e {
+        Event::GroupCreated(id) => EventJson::GroupCreated {
+            group: id.to_string(),
+        },
+        Event::GroupImported(id) => EventJson::GroupImported {
+            group: id.to_string(),
+        },
+        Event::GroupFormed(id) => EventJson::GroupFormed {
+            group: id.to_string(),
+        },
+        Event::InvitationSent(op) => EventJson::InvitationSent {
+            op: op.0.to_string(),
+        },
+        Event::InvitationReceived { group, invitation } => EventJson::InvitationReceived {
+            group: group.to_string(),
+            invitation: hex::encode(invitation),
+        },
+        Event::AcceptanceSent(op) => EventJson::AcceptanceSent {
+            op: op.0.to_string(),
+        },
+        Event::ConsentReceived(op) => EventJson::ConsentReceived {
+            op: op.0.to_string(),
+        },
+        Event::Admitted(op) => EventJson::Admitted {
+            op: op.0.to_string(),
+        },
+        Event::Joined(id) => EventJson::Joined {
+            group: id.to_string(),
+        },
+        Event::MemberAdmitted { group, member } => EventJson::MemberAdmitted {
+            group: group.to_string(),
+            member: hex::encode(member),
+        },
+        Event::Left(id) => EventJson::Left {
+            group: id.to_string(),
+        },
+        Event::MemberDeparted { group, member } => EventJson::MemberDeparted {
+            group: group.to_string(),
+            member: hex::encode(member),
+        },
+        Event::FrameRejected(r) => EventJson::FrameRejected {
+            reason: format!("{r:?}"),
+        },
+    }
+}
+
+fn map_handle_error(err: &mesh_identity::groups::handle::HandleError) -> i32 {
+    use mesh_identity::groups::handle::HandleError;
+    match err {
+        HandleError::Full => MESH_ERR_CAPACITY_EXCEEDED,
+        HandleError::Invalid => MESH_ERR_INVALID_ARG,
+        HandleError::UnknownOp | HandleError::Unknown => MESH_ERR_NOT_FOUND,
+        HandleError::UnsupportedPolicy | HandleError::UnsupportedVersion(_) => MESH_ERR_UNSUPPORTED,
+        HandleError::Ineligible => MESH_ERR_INELIGIBLE,
+        HandleError::Duplicate => MESH_ERR_DUPLICATE_GROUP,
+        HandleError::TooLarge => MESH_ERR_TOO_LARGE,
+        HandleError::Malformed => MESH_ERR_MALFORMED,
+        HandleError::Installation(_) | HandleError::Group(_) => MESH_ERR_INVALID_SNAPSHOT,
+        HandleError::Formation(_) => MESH_ERR_FORMATION,
+    }
+}
+
+/// Create a new `MeshGroupHandle` from an initial root identity seed.
+///
+/// # Safety
+///
+/// - `seed_ptr` must point to at least 32 readable bytes.
+/// - `out_handle` must be a valid, non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_create(
+    seed_ptr: *const u8,
+    seed_len: usize,
+    out_handle: *mut *mut MeshGroupHandle,
+) -> i32 {
+    clear_last_error();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if seed_ptr.is_null() || seed_len != 32 || out_handle.is_null() {
+            set_last_error("invalid arguments passed to mesh_group_handle_create");
+            return MESH_ERR_INVALID_ARG;
+        }
+
+        let mut seed = [0u8; 32];
+        unsafe {
+            std::ptr::copy_nonoverlapping(seed_ptr, seed.as_mut_ptr(), 32);
+        }
+        let signing_key = SigningKey::from_bytes(&seed);
+        seed.zeroize();
+
+        let installation = mesh_identity::session::installation::Installation::new(signing_key);
+        let group_handle = mesh_identity::groups::handle::GroupHandle::new(installation);
+
+        let handle = Box::into_raw(Box::new(MeshGroupHandle {
+            group_handle,
+            is_poisoned: false,
+        }));
+        unsafe {
+            *out_handle = handle;
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        set_last_error("native panic caught at FFI boundary");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Create a `MeshGroupHandle` consuming an existing `MeshInstallationHandle`.
+///
+/// On success, takes ownership of and deallocates `inst_handle`, transferring its
+/// underlying `Installation` into a new `MeshGroupHandle`. On failure, `inst_handle`
+/// is preserved and remains valid.
+///
+/// # Safety
+///
+/// - `inst_handle` must be a valid, non-null pointer to a `MeshInstallationHandle`.
+/// - `out_handle` must be a valid, non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_from_installation(
+    inst_handle: *mut MeshInstallationHandle,
+    out_handle: *mut *mut MeshGroupHandle,
+) -> i32 {
+    clear_last_error();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if inst_handle.is_null() || out_handle.is_null() {
+            set_last_error("invalid arguments passed to mesh_group_handle_from_installation");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let inst_ref = unsafe { &mut *inst_handle };
+        if inst_ref.is_poisoned {
+            set_last_error("installation handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+
+        let inst_box = unsafe { Box::from_raw(inst_handle) };
+        let group_handle = mesh_identity::groups::handle::GroupHandle::new(inst_box.installation);
+        let handle = Box::into_raw(Box::new(MeshGroupHandle {
+            group_handle,
+            is_poisoned: false,
+        }));
+        unsafe {
+            *out_handle = handle;
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        set_last_error("native panic caught at FFI boundary");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Free a `MeshGroupHandle`.
+///
+/// # Safety
+///
+/// - `handle` must be a valid pointer allocated by `mesh_group_handle_*`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_free(handle: *mut MeshGroupHandle) {
+    if !handle.is_null() {
+        let _ = catch_unwind(AssertUnwindSafe(|| unsafe {
+            drop(Box::from_raw(handle));
+        }));
+    }
+}
+
+/// Get the 32-byte public key of the currently selected identity in this group handle.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshGroupHandle`.
+/// - `out_pk` must point to at least 32 writable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_selected_identity(
+    handle: *mut MeshGroupHandle,
+    out_pk: *mut u8,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() || out_pk.is_null() {
+            set_last_error("invalid arguments passed to mesh_group_handle_selected_identity");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("group handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        let pk = handle.group_handle.installation().selected();
+        unsafe {
+            std::ptr::copy_nonoverlapping(pk.as_ptr(), out_pk, 32);
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Create a new group with the selected identity and optional initial members.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshGroupHandle`.
+/// - `members_ptr` must point to at least `members_count * 32` readable bytes if `members_count > 0`.
+/// - `out_op_id` must be a valid, non-null writable pointer to a `u64`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_create_group(
+    handle: *mut MeshGroupHandle,
+    members_ptr: *const u8,
+    members_count: usize,
+    out_op_id: *mut u64,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() || out_op_id.is_null() {
+            set_last_error("invalid arguments passed to mesh_group_handle_create_group");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("group handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        if members_count >= MAX_GROUP_MEMBERS {
+            set_last_error("members count exceeds maximum allowable members (192)");
+            return MESH_ERR_TOO_LARGE;
+        }
+        let mut members = Vec::with_capacity(members_count);
+        if members_count > 0 {
+            if members_ptr.is_null() {
+                set_last_error("members_ptr is null but members_count > 0");
+                return MESH_ERR_INVALID_ARG;
+            }
+            for i in 0..members_count {
+                let mut pk = [0u8; 32];
+                unsafe {
+                    std::ptr::copy_nonoverlapping(members_ptr.add(i * 32), pk.as_mut_ptr(), 32);
+                }
+                members.push(pk);
+            }
+        }
+        match handle.group_handle.create(
+            mesh_identity::groups::Policy::InviterOnly,
+            &members,
+            &mut OsRng,
+        ) {
+            Ok(op_id) => {
+                unsafe {
+                    *out_op_id = op_id.0;
+                }
+                MESH_OK
+            }
+            Err(e) => {
+                set_last_error(format!("{e:?}"));
+                map_handle_error(&e)
+            }
+        }
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Import a group from an authenticated genesis frame and expected digest.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshGroupHandle`.
+/// - `frame_ptr` must point to at least `frame_len` readable bytes.
+/// - `digest_ptr` must point to at least 32 readable bytes.
+/// - `out_op_id` must be a valid, non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_import_genesis(
+    handle: *mut MeshGroupHandle,
+    frame_ptr: *const u8,
+    frame_len: usize,
+    digest_ptr: *const u8,
+    out_op_id: *mut u64,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null()
+            || frame_ptr.is_null()
+            || frame_len == 0
+            || frame_len > MAX_GROUP_FRAME_BYTES
+            || digest_ptr.is_null()
+            || out_op_id.is_null()
+        {
+            set_last_error("invalid arguments passed to mesh_group_handle_import_genesis");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("group handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        let frame = unsafe { slice::from_raw_parts(frame_ptr, frame_len) };
+        let mut expected_digest = [0u8; 32];
+        unsafe {
+            std::ptr::copy_nonoverlapping(digest_ptr, expected_digest.as_mut_ptr(), 32);
+        }
+        match handle.group_handle.import_genesis(frame, expected_digest) {
+            Ok(op_id) => {
+                unsafe {
+                    *out_op_id = op_id.0;
+                }
+                MESH_OK
+            }
+            Err(e) => {
+                set_last_error(format!("{e:?}"));
+                map_handle_error(&e)
+            }
+        }
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Invite a verified contact candidate to an active group.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshGroupHandle`.
+/// - `candidate_ptr` must point to at least 32 readable bytes.
+/// - `out_op_id` must be a valid, non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_invite(
+    handle: *mut MeshGroupHandle,
+    group_id: u64,
+    candidate_ptr: *const u8,
+    lifetime_ms: u64,
+    now: u64,
+    out_op_id: *mut u64,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() || candidate_ptr.is_null() || out_op_id.is_null() {
+            set_last_error("invalid arguments passed to mesh_group_handle_invite");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("group handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        let mut candidate = [0u8; 32];
+        unsafe {
+            std::ptr::copy_nonoverlapping(candidate_ptr, candidate.as_mut_ptr(), 32);
+        }
+        match handle
+            .group_handle
+            .invite(group_id, candidate, lifetime_ms, now)
+        {
+            Ok(op_id) => {
+                unsafe {
+                    *out_op_id = op_id.0;
+                }
+                MESH_OK
+            }
+            Err(e) => {
+                set_last_error(format!("{e:?}"));
+                map_handle_error(&e)
+            }
+        }
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Accept a received invitation by its 32-byte binding.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshGroupHandle`.
+/// - `invitation_binding_ptr` must point to at least 32 readable bytes.
+/// - `out_op_id` must be a valid, non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_accept(
+    handle: *mut MeshGroupHandle,
+    invitation_binding_ptr: *const u8,
+    now: u64,
+    out_op_id: *mut u64,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() || invitation_binding_ptr.is_null() || out_op_id.is_null() {
+            set_last_error("invalid arguments passed to mesh_group_handle_accept");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("group handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        let mut invitation = [0u8; 32];
+        unsafe {
+            std::ptr::copy_nonoverlapping(invitation_binding_ptr, invitation.as_mut_ptr(), 32);
+        }
+        match handle.group_handle.accept(invitation, now) {
+            Ok(op_id) => {
+                unsafe {
+                    *out_op_id = op_id.0;
+                }
+                MESH_OK
+            }
+            Err(e) => {
+                set_last_error(format!("{e:?}"));
+                map_handle_error(&e)
+            }
+        }
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Accept an invitation with out-of-band genesis authentication.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshGroupHandle`.
+/// - `invitation_binding_ptr` and `genesis_digest_ptr` must point to 32 readable bytes.
+/// - `out_op_id` must be a valid, non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_accept_authenticated(
+    handle: *mut MeshGroupHandle,
+    invitation_binding_ptr: *const u8,
+    genesis_digest_ptr: *const u8,
+    now: u64,
+    out_op_id: *mut u64,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null()
+            || invitation_binding_ptr.is_null()
+            || genesis_digest_ptr.is_null()
+            || out_op_id.is_null()
+        {
+            set_last_error("invalid arguments passed to mesh_group_handle_accept_authenticated");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("group handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        let mut invitation = [0u8; 32];
+        let mut digest = [0u8; 32];
+        unsafe {
+            std::ptr::copy_nonoverlapping(invitation_binding_ptr, invitation.as_mut_ptr(), 32);
+            std::ptr::copy_nonoverlapping(genesis_digest_ptr, digest.as_mut_ptr(), 32);
+        }
+        match handle
+            .group_handle
+            .accept_authenticated(invitation, digest, now)
+        {
+            Ok(op_id) => {
+                unsafe {
+                    *out_op_id = op_id.0;
+                }
+                MESH_OK
+            }
+            Err(e) => {
+                set_last_error(format!("{e:?}"));
+                map_handle_error(&e)
+            }
+        }
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Leave an active group.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshGroupHandle`.
+/// - `out_op_id` must be a valid, non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_leave(
+    handle: *mut MeshGroupHandle,
+    group_id: u64,
+    now: u64,
+    out_op_id: *mut u64,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() || out_op_id.is_null() {
+            set_last_error("invalid arguments passed to mesh_group_handle_leave");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("group handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        match handle.group_handle.leave(group_id, now) {
+            Ok(op_id) => {
+                unsafe {
+                    *out_op_id = op_id.0;
+                }
+                MESH_OK
+            }
+            Err(e) => {
+                set_last_error(format!("{e:?}"));
+                map_handle_error(&e)
+            }
+        }
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Ingest inbound network bytes from a peer.
+///
+/// Outputs JSON array of immediate rejection events (or empty if accepted/staged).
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshGroupHandle`.
+/// - `from_ptr` must point to at least 32 readable bytes.
+/// - `bytes_ptr` must point to at least `bytes_len` readable bytes.
+/// - `out_events_json` must be a valid, non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_receive_bytes(
+    handle: *mut MeshGroupHandle,
+    from_ptr: *const u8,
+    bytes_ptr: *const u8,
+    bytes_len: usize,
+    now: u64,
+    out_events_json: *mut *mut c_char,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null()
+            || from_ptr.is_null()
+            || bytes_ptr.is_null()
+            || bytes_len == 0
+            || bytes_len > MAX_GROUP_FRAME_BYTES
+            || out_events_json.is_null()
+        {
+            set_last_error("invalid arguments passed to mesh_group_handle_receive_bytes");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("group handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        let mut from = [0u8; 32];
+        unsafe {
+            std::ptr::copy_nonoverlapping(from_ptr, from.as_mut_ptr(), 32);
+        }
+        let bytes = unsafe { slice::from_raw_parts(bytes_ptr, bytes_len) };
+        let events = handle.group_handle.receive_bytes(from, bytes, now);
+        let json_events: Vec<EventJson> = events.iter().map(event_to_json).collect();
+        let s = match serde_json::to_string(&json_events) {
+            Ok(s) => s,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+        let c_str = match CString::new(s) {
+            Ok(c) => c,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+        unsafe {
+            *out_events_json = c_str.into_raw();
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Get a JSON list of all active group IDs held by the selected persona.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshGroupHandle`.
+/// - `out_json` must be a valid, non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_group_ids(
+    handle: *mut MeshGroupHandle,
+    out_json: *mut *mut c_char,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() || out_json.is_null() {
+            set_last_error("invalid arguments passed to mesh_group_handle_group_ids");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("group handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        let ids: Vec<String> = handle
+            .group_handle
+            .group_ids()
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect();
+        let s = match serde_json::to_string(&ids) {
+            Ok(s) => s,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+        let c_str = match CString::new(s) {
+            Ok(c) => c,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+        unsafe {
+            *out_json = c_str.into_raw();
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Query public view of a held group by ID.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshGroupHandle`.
+/// - `out_json` must be a valid, non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_get_group(
+    handle: *mut MeshGroupHandle,
+    group_id: u64,
+    out_json: *mut *mut c_char,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() || out_json.is_null() {
+            set_last_error("invalid arguments passed to mesh_group_handle_get_group");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("group handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        let view = match handle.group_handle.group(group_id) {
+            Some(v) => v,
+            None => {
+                set_last_error("group not found");
+                return MESH_ERR_NOT_FOUND;
+            }
+        };
+        let members: Vec<String> = view.member_keys().into_iter().map(hex::encode).collect();
+        let view_json = GroupViewJson {
+            id: view.id().to_string(),
+            revision: view.revision().to_string(),
+            policy: format!("{:?}", view.policy()),
+            members,
+        };
+        let s = match serde_json::to_string(&view_json) {
+            Ok(s) => s,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+        let c_str = match CString::new(s) {
+            Ok(c) => c,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+        unsafe {
+            *out_json = c_str.into_raw();
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Query pending invitations waiting for acceptance by the selected identity.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshGroupHandle`.
+/// - `out_json` must be a valid, non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_pending_invitations(
+    handle: *mut MeshGroupHandle,
+    out_json: *mut *mut c_char,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() || out_json.is_null() {
+            set_last_error("invalid arguments passed to mesh_group_handle_pending_invitations");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("group handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        let items: Vec<PendingInvitationJson> = handle
+            .group_handle
+            .pending_invitations()
+            .into_iter()
+            .map(|(binding, group, inviter)| PendingInvitationJson {
+                binding: hex::encode(binding),
+                group: group.to_string(),
+                inviter: hex::encode(inviter),
+            })
+            .collect();
+        let s = match serde_json::to_string(&items) {
+            Ok(s) => s,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+        let c_str = match CString::new(s) {
+            Ok(c) => c,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+        unsafe {
+            *out_json = c_str.into_raw();
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Save the complete group handle state to an authenticated CBOR blob.
+///
+/// Returns `(token_counter, token_incarnation)` and the blob buffer (must be freed with `mesh_buffer_free`).
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshGroupHandle`.
+/// - `out_token_counter`, `out_token_incarnation` (32 bytes), `out_blob_ptr`, and `out_blob_len` must be writable pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_save(
+    handle: *mut MeshGroupHandle,
+    now: u64,
+    out_token_counter: *mut u64,
+    out_token_incarnation: *mut u8,
+    out_blob_ptr: *mut *mut u8,
+    out_blob_len: *mut usize,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null()
+            || out_token_counter.is_null()
+            || out_token_incarnation.is_null()
+            || out_blob_ptr.is_null()
+            || out_blob_len.is_null()
+        {
+            set_last_error("invalid arguments passed to mesh_group_handle_save");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("group handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        match handle.group_handle.save(now) {
+            Ok((token, blob)) => {
+                let mut boxed = blob.into_boxed_slice();
+                unsafe {
+                    *out_token_counter = token.counter();
+                    std::ptr::copy_nonoverlapping(
+                        token.incarnation().as_ptr(),
+                        out_token_incarnation,
+                        32,
+                    );
+                    *out_blob_len = boxed.len();
+                    *out_blob_ptr = boxed.as_mut_ptr();
+                }
+                std::mem::forget(boxed);
+                MESH_OK
+            }
+            Err(e) => {
+                set_last_error(format!("{e:?}"));
+                map_handle_error(&e)
+            }
+        }
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Confirm a saved blob is durable, releasing staged outgoing frames and returning resulting events.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshGroupHandle`.
+/// - `token_incarnation_ptr` must point to at least 32 readable bytes.
+/// - `out_events_json` must be a valid, non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_confirm_saved(
+    handle: *mut MeshGroupHandle,
+    token_counter: u64,
+    token_incarnation_ptr: *const u8,
+    out_events_json: *mut *mut c_char,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() || token_incarnation_ptr.is_null() || out_events_json.is_null() {
+            set_last_error("invalid arguments passed to mesh_group_handle_confirm_saved");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("group handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        let mut incarnation = [0u8; 32];
+        unsafe {
+            std::ptr::copy_nonoverlapping(token_incarnation_ptr, incarnation.as_mut_ptr(), 32);
+        }
+        let token = mesh_identity::groups::handle::SaveToken::new(token_counter, incarnation);
+        let events = handle.group_handle.confirm_saved(token);
+        let json_events: Vec<EventJson> = events.iter().map(event_to_json).collect();
+        let s = match serde_json::to_string(&json_events) {
+            Ok(s) => s,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+        let c_str = match CString::new(s) {
+            Ok(c) => c,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+        unsafe {
+            *out_events_json = c_str.into_raw();
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Retrieve and remove all released outgoing frames ready to transmit over the network.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshGroupHandle`.
+/// - `out_outgoing_json` must be a valid, non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_take_outgoing(
+    handle: *mut MeshGroupHandle,
+    out_outgoing_json: *mut *mut c_char,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() || out_outgoing_json.is_null() {
+            set_last_error("invalid arguments passed to mesh_group_handle_take_outgoing");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("group handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        let outgoing = handle.group_handle.take_outgoing();
+        let json_outgoing: Vec<OutgoingJson> = outgoing
+            .iter()
+            .map(|o| OutgoingJson {
+                from: hex::encode(o.from),
+                to: o.to.iter().map(hex::encode).collect(),
+                tag: o.kind as u8,
+                bytes: hex::encode(&o.bytes),
+                authenticator: o.authenticator.map(hex::encode),
+            })
+            .collect();
+        let s = match serde_json::to_string(&json_outgoing) {
+            Ok(s) => s,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+        let c_str = match CString::new(s) {
+            Ok(c) => c,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+        unsafe {
+            *out_outgoing_json = c_str.into_raw();
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Re-stage the frames of an operation without re-signing.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshGroupHandle`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_resend(handle: *mut MeshGroupHandle, op_id: u64) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() {
+            set_last_error("handle is null in mesh_group_handle_resend");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("group handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        match handle
+            .group_handle
+            .resend(mesh_identity::groups::handle::OpId(op_id))
+        {
+            Ok(()) => MESH_OK,
+            Err(e) => {
+                set_last_error(format!("{e:?}"));
+                map_handle_error(&e)
+            }
+        }
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Query the execution state of an operation by ID.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshGroupHandle`.
+/// - `out_json` must be a valid, non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_op_state(
+    handle: *mut MeshGroupHandle,
+    op_id: u64,
+    out_json: *mut *mut c_char,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() || out_json.is_null() {
+            set_last_error("invalid arguments passed to mesh_group_handle_op_state");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("group handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        let state = match handle
+            .group_handle
+            .op_state(mesh_identity::groups::handle::OpId(op_id))
+        {
+            Some(s) => s,
+            None => {
+                set_last_error("operation not found");
+                return MESH_ERR_NOT_FOUND;
+            }
+        };
+        use mesh_identity::groups::handle::OpState;
+        let op_json = match state {
+            OpState::Pending => OpStateJson {
+                status: "Pending".to_string(),
+                reason: None,
+            },
+            OpState::Completed => OpStateJson {
+                status: "Completed".to_string(),
+                reason: None,
+            },
+            OpState::Rejected(r) => OpStateJson {
+                status: "Rejected".to_string(),
+                reason: Some(format!("{r:?}")),
+            },
+            OpState::Retryable(r) => OpStateJson {
+                status: "Retryable".to_string(),
+                reason: Some(format!("{r:?}")),
+            },
+        };
+        let s = match serde_json::to_string(&op_json) {
+            Ok(s) => s,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+        let c_str = match CString::new(s) {
+            Ok(c) => c,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+        unsafe {
+            *out_json = c_str.into_raw();
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Restore a `MeshGroupHandle` from a snapshot blob and known identity seeds.
+///
+/// # Safety
+///
+/// - `blob_ptr` must point to at least `blob_len` readable bytes.
+/// - `seeds_ptr` must point to at least `seeds_count * 32` readable bytes.
+/// - `out_handle` must be a valid, non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_restore(
+    blob_ptr: *const u8,
+    blob_len: usize,
+    seeds_ptr: *const u8,
+    seeds_count: usize,
+    out_handle: *mut *mut MeshGroupHandle,
+) -> i32 {
+    clear_last_error();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if blob_ptr.is_null()
+            || blob_len == 0
+            || blob_len > MAX_GROUP_SNAPSHOT_BYTES
+            || seeds_ptr.is_null()
+            || seeds_count == 0
+            || seeds_count > MAX_SEEDS_CEILING
+            || out_handle.is_null()
+        {
+            set_last_error("invalid arguments passed to mesh_group_handle_restore");
+            return MESH_ERR_INVALID_ARG;
+        }
+
+        let total_seed_bytes = match seeds_count.checked_mul(32) {
+            Some(n) => n,
+            None => {
+                set_last_error("seeds_count calculation overflowed");
+                return MESH_ERR_INVALID_ARG;
+            }
+        };
+
+        let blob = unsafe { slice::from_raw_parts(blob_ptr, blob_len) };
+        let raw_seeds = unsafe { slice::from_raw_parts(seeds_ptr, total_seed_bytes) };
+        let mut keys = Vec::with_capacity(seeds_count);
+        for chunk in raw_seeds.as_chunks::<32>().0 {
+            let mut seed_copy = *chunk;
+            keys.push(SigningKey::from_bytes(&seed_copy));
+            seed_copy.zeroize();
+        }
+
+        match mesh_identity::groups::handle::GroupHandle::restore(blob, keys) {
+            Ok(group_handle) => {
+                let handle = Box::into_raw(Box::new(MeshGroupHandle {
+                    group_handle,
+                    is_poisoned: false,
+                }));
+                unsafe {
+                    *out_handle = handle;
+                }
+                MESH_OK
+            }
+            Err(e) => {
+                set_last_error(format!("{e:?}"));
+                map_handle_error(&e)
+            }
+        }
     }));
     result.unwrap_or_else(|_| {
         set_last_error("native panic caught at FFI boundary");

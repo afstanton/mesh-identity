@@ -2,5 +2,7 @@
 library;
 
 export 'src/exceptions.dart';
+export 'src/group_handle.dart';
+export 'src/group_models.dart';
 export 'src/installation.dart';
 export 'src/models.dart';

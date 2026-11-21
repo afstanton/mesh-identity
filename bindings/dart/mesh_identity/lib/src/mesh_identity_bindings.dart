@@ -454,6 +454,261 @@ external int mesh_handoff_bundle_inspect(
   ffi.Pointer<ffi.Pointer<ffi.Char>> outJson,
 );
 
+// ---------------------------------------------------------------------------
+// Group Handle C-ABI declarations (Slice 4)
+// ---------------------------------------------------------------------------
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Pointer<ffi.Void>>,
+  )
+>()
+external int mesh_group_handle_create(
+  ffi.Pointer<ffi.Uint8> seedPtr,
+  int seedLen,
+  ffi.Pointer<ffi.Pointer<ffi.Void>> outHandle,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Pointer<ffi.Void>>)
+>()
+external int mesh_group_handle_from_installation(
+  ffi.Pointer<ffi.Void> instHandle,
+  ffi.Pointer<ffi.Pointer<ffi.Void>> outHandle,
+);
+
+@ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Void>)>()
+external void mesh_group_handle_free(ffi.Pointer<ffi.Void> handle);
+
+@ffi.Native<ffi.Int32 Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Uint8>)>()
+external int mesh_group_handle_selected_identity(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Uint8> outPk,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Uint64>,
+  )
+>()
+external int mesh_group_handle_create_group(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Uint8> membersPtr,
+  int membersCount,
+  ffi.Pointer<ffi.Uint64> outOpId,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Pointer<ffi.Uint64>,
+  )
+>()
+external int mesh_group_handle_import_genesis(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Uint8> framePtr,
+  int frameLen,
+  ffi.Pointer<ffi.Uint8> digestPtr,
+  ffi.Pointer<ffi.Uint64> outOpId,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Uint64,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Uint64>,
+  )
+>()
+external int mesh_group_handle_invite(
+  ffi.Pointer<ffi.Void> handle,
+  int groupId,
+  ffi.Pointer<ffi.Uint8> candidatePtr,
+  int lifetimeMs,
+  int now,
+  ffi.Pointer<ffi.Uint64> outOpId,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Uint64>,
+  )
+>()
+external int mesh_group_handle_accept(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Uint8> invitationBindingPtr,
+  int now,
+  ffi.Pointer<ffi.Uint64> outOpId,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Uint64>,
+  )
+>()
+external int mesh_group_handle_accept_authenticated(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Uint8> invitationBindingPtr,
+  ffi.Pointer<ffi.Uint8> genesisDigestPtr,
+  int now,
+  ffi.Pointer<ffi.Uint64> outOpId,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Uint64,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Uint64>,
+  )
+>()
+external int mesh_group_handle_leave(
+  ffi.Pointer<ffi.Void> handle,
+  int groupId,
+  int now,
+  ffi.Pointer<ffi.Uint64> outOpId,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Pointer<ffi.Char>>,
+  )
+>()
+external int mesh_group_handle_receive_bytes(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Uint8> fromPtr,
+  ffi.Pointer<ffi.Uint8> bytesPtr,
+  int bytesLen,
+  int now,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> outEventsJson,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Pointer<ffi.Char>>)
+>()
+external int mesh_group_handle_group_ids(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> outJson,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Pointer<ffi.Char>>,
+  )
+>()
+external int mesh_group_handle_get_group(
+  ffi.Pointer<ffi.Void> handle,
+  int groupId,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> outJson,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Pointer<ffi.Char>>)
+>()
+external int mesh_group_handle_pending_invitations(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> outJson,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Uint64>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Pointer<ffi.Pointer<ffi.Uint8>>,
+    ffi.Pointer<ffi.Size>,
+  )
+>()
+external int mesh_group_handle_save(
+  ffi.Pointer<ffi.Void> handle,
+  int now,
+  ffi.Pointer<ffi.Uint64> outTokenCounter,
+  ffi.Pointer<ffi.Uint8> outTokenIncarnation,
+  ffi.Pointer<ffi.Pointer<ffi.Uint8>> outBlobPtr,
+  ffi.Pointer<ffi.Size> outBlobLen,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Pointer<ffi.Pointer<ffi.Char>>,
+  )
+>()
+external int mesh_group_handle_confirm_saved(
+  ffi.Pointer<ffi.Void> handle,
+  int tokenCounter,
+  ffi.Pointer<ffi.Uint8> tokenIncarnationPtr,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> outEventsJson,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Pointer<ffi.Char>>)
+>()
+external int mesh_group_handle_take_outgoing(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> outOutgoingJson,
+);
+
+@ffi.Native<ffi.Int32 Function(ffi.Pointer<ffi.Void>, ffi.Uint64)>()
+external int mesh_group_handle_resend(ffi.Pointer<ffi.Void> handle, int opId);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Uint64,
+    ffi.Pointer<ffi.Pointer<ffi.Char>>,
+  )
+>()
+external int mesh_group_handle_op_state(
+  ffi.Pointer<ffi.Void> handle,
+  int opId,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> outJson,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Pointer<ffi.Void>>,
+  )
+>()
+external int mesh_group_handle_restore(
+  ffi.Pointer<ffi.Uint8> blobPtr,
+  int blobLen,
+  ffi.Pointer<ffi.Uint8> seedsPtr,
+  int seedsCount,
+  ffi.Pointer<ffi.Pointer<ffi.Void>> outHandle,
+);
+
 /// Utility for querying last native errors and checking call results.
 abstract final class MeshIdentityBindings {
   static const int meshOk = 0;
@@ -478,6 +733,12 @@ abstract final class MeshIdentityBindings {
   static const int meshErrCounterExhausted = -19;
   static const int meshErrNotGated = -20;
   static const int meshErrHandoffWriteFailed = -21;
+  static const int meshErrUnsupported = -22;
+  static const int meshErrIneligible = -23;
+  static const int meshErrDuplicateGroup = -24;
+  static const int meshErrTooLarge = -25;
+  static const int meshErrMalformed = -26;
+  static const int meshErrFormation = -27;
 
   /// Retrieve the last recorded error string from native TLS.
   static String? getLastError() {
@@ -536,6 +797,18 @@ abstract final class MeshIdentityBindings {
         throw NotGatedException(errText);
       case meshErrHandoffWriteFailed:
         throw HandoffWriteFailedException(errText);
+      case meshErrUnsupported:
+        throw UnsupportedGroupException(errText);
+      case meshErrIneligible:
+        throw IneligibleException(errText);
+      case meshErrDuplicateGroup:
+        throw DuplicateGroupException(errText);
+      case meshErrTooLarge:
+        throw GroupTooLargeException(errText);
+      case meshErrMalformed:
+        throw MalformedGroupException(errText);
+      case meshErrFormation:
+        throw GroupFormationException(errText);
       default:
         throw GenericMeshIdentityException(errText);
     }

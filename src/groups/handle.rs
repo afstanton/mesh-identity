@@ -61,6 +61,20 @@ pub struct OpId(pub u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Ord, PartialOrd)]
 pub struct SaveToken(pub u64, [u8; 32]);
 
+impl SaveToken {
+    pub const fn new(counter: u64, incarnation: [u8; 32]) -> Self {
+        Self(counter, incarnation)
+    }
+
+    pub const fn counter(&self) -> u64 {
+        self.0
+    }
+
+    pub const fn incarnation(&self) -> [u8; 32] {
+        self.1
+    }
+}
+
 type GroupScope = (Key, u64);
 
 type LocalBinding = (Key, [u8; 32]);

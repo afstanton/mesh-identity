@@ -1,3 +1,18 @@
+## 0.4.0
+
+- Added Byzantine Group Admission & Governance protocol support (Slice 4).
+- Group handle controller: `MeshGroupHandle` initialized with fresh seed, restored from snapshot, or consuming an existing `MeshInstallation` with atomic ownership detachment (`MeshInstallation.finalizeTransfer()`).
+- Byzantine group formation & genesis: `createGroup` and `importGenesis` with authenticated SHA-256 genesis digest verification.
+- Verified contact admission vouchers: `invite`, `accept`, and `acceptAuthenticated` with out-of-band genesis verification. Enforces prerequisite that candidates must be verified contacts (`IneligibleException`).
+- Two-phase commit outbox staging: `save(now)` producing `SaveToken` and snapshot blob, and `confirmSaved(token)` releasing staged frames and returning newly confirmed `GroupEvent`s. Outgoing messages are strictly withheld until durable save is confirmed.
+- Network frame transmission: `takeOutgoing()` draining released `OutgoingMessage` instances ready for transport. Value equality and hashing deep-compare all recipient keys and authenticators.
+- Group governance: `leaveGroup` initiating Byzantine consensus departure, `receiveBytes` processing inbound peer wire frames with immediate malformed frame rejection (`FrameRejectedEvent`).
+- Operation inspection & resend: `resend(opId)` re-staging frames without re-signing, and `getOpState(opId)` tracking operation status.
+- Strict defensive bounds: inbound wire frames and genesis frames capped at 128 KiB, snapshot blobs capped at 256 MiB, and genesis membership capped at 192 members before native buffer allocation.
+- Lossless 64-bit precision across FFI and JSON: group IDs, sequence counters, and revisions mapped to Dart `BigInt` and JSON decimal strings.
+- Added typed group exceptions: `IneligibleException`, `DuplicateGroupException`, `UnsupportedGroupException`, `GroupFormationException`, `GroupTooLargeException`, and `MalformedGroupException`.
+- Comprehensive integration tests covering group creation, genesis import, verified invitation/consent/admission/join lifecycle, departure, snapshot persistence across restarts, withheld frames, and bounds validation.
+
 ## 0.3.0
 
 - Added device-to-device handoff and voting role migration protocol (Slice 3).

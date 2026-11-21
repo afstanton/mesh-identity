@@ -119,3 +119,33 @@ final class NotGatedException extends MeshIdentityException {
 final class HandoffWriteFailedException extends MeshIdentityException {
   const HandoffWriteFailedException(super.message);
 }
+
+/// Thrown when an operation is ineligible (e.g. not a member, not a verified contact, or gated).
+final class IneligibleException extends MeshIdentityException {
+  const IneligibleException(super.message);
+}
+
+/// Thrown when a duplicate group ID is detected.
+final class DuplicateGroupException extends MeshIdentityException {
+  const DuplicateGroupException(super.message);
+}
+
+/// Thrown when an unsupported group policy or version is encountered.
+final class UnsupportedGroupException extends MeshIdentityException {
+  const UnsupportedGroupException(super.message);
+}
+
+/// Thrown when a group formation fails or is refused.
+final class GroupFormationException extends MeshIdentityException {
+  const GroupFormationException(super.message);
+}
+
+/// Thrown when a group blob, frame, or item exceeds maximum size limits.
+final class GroupTooLargeException extends MeshIdentityException {
+  const GroupTooLargeException(super.message);
+}
+
+/// Thrown when a group frame or blob is malformed.
+final class MalformedGroupException extends MeshIdentityException {
+  const MalformedGroupException(super.message);
+}

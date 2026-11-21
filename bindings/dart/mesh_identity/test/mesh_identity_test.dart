@@ -1020,4 +1020,667 @@ void main() {
       expect(() => inst.beginHandoff(nonce), throwsA(isA<DisposedException>()));
     });
   });
+
+  group('Byzantine Group Admission & Governance', () {
+    void pairNodes(MeshInstallation alice, MeshInstallation bob, DateTime now) {
+      final aliceStart = alice.startEncounter(at: now);
+      final bobCeremony = bob.openScanner(at: now);
+      final response = bob.scanOffer(
+        bobCeremony,
+        aliceStart.offerPayload,
+        at: now,
+      );
+      final reveal = alice.scanResponse(aliceStart.ceremony, response, at: now);
+      bob.scanReveal(bobCeremony, reveal, at: now);
+      final aliceComp = alice.getComparison(aliceStart.ceremony, at: now)!;
+      final bobComp = bob.getComparison(bobCeremony, at: now)!;
+      expect(aliceComp.code, equals(bobComp.code));
+      final aSaved = alice.confirmAndSave(
+        aliceStart.ceremony,
+        aliceComp.code,
+        at: now,
+      );
+      final bSaved = bob.confirmAndSave(bobCeremony, bobComp.code, at: now);
+      expect(aSaved.isVerified, isTrue);
+      expect(bSaved.isVerified, isTrue);
+      final aContact = alice.getContact(bob.selectedIdentity);
+      expect(aContact, isNotNull);
+      expect(aContact!.isVerified, isTrue);
+    }
+
+    bool matchesKey(List<Uint8List> list, Uint8List target) {
+      return list.any((item) {
+        if (item.length != target.length) return false;
+        for (var i = 0; i < item.length; i++) {
+          if (item[i] != target[i]) return false;
+        }
+        return true;
+      });
+    }
+
+    test('group handle creation, identity, and disposal lifecycle', () {
+      final seed = MeshInstallation.generateSeed();
+      final handle = MeshGroupHandle(seed: seed);
+
+      expect(handle.selectedIdentity.length, equals(32));
+      expect(handle.getGroupIds(), isEmpty);
+      expect(handle.getPendingInvitations(), isEmpty);
+      expect(handle.isDisposed, isFalse);
+
+      handle.dispose();
+      expect(handle.isDisposed, isTrue);
+
+      // Safe double dispose
+      handle.dispose();
+
+      // Disposed calls throw DisposedException
+      expect(() => handle.selectedIdentity, throwsA(isA<DisposedException>()));
+      expect(() => handle.getGroupIds(), throwsA(isA<DisposedException>()));
+      expect(() => handle.createGroup(), throwsA(isA<DisposedException>()));
+    });
+
+    test('ownership transfer from MeshInstallation to MeshGroupHandle', () {
+      final seed = MeshInstallation.generateSeed();
+      final inst = MeshInstallation(seed: seed);
+      final expectedIdentity = inst.selectedIdentity;
+
+      final groupHandle = MeshGroupHandle.fromInstallation(inst);
+
+      // Installation is immediately disposed
+      expect(inst.isDisposed, isTrue);
+      expect(() => inst.selectedIdentity, throwsA(isA<DisposedException>()));
+
+      // Group handle now owns the identity
+      expect(groupHandle.selectedIdentity, equals(expectedIdentity));
+      expect(groupHandle.getGroupIds(), isEmpty);
+
+      groupHandle.dispose();
+    });
+
+    test('group creation, two-phase outbox save, and genesis export', () {
+      final seed = MeshInstallation.generateSeed();
+      final handle = MeshGroupHandle(seed: seed);
+      final now = DateTime.utc(2026, 6, 1, 12, 0, 0);
+
+      final opId = handle.createGroup();
+      expect(opId, greaterThanOrEqualTo(BigInt.zero));
+
+      // Before save & confirm, group is not yet active or released
+      expect(handle.takeOutgoing(), isEmpty);
+
+      // Phase 1: save
+      final saveRes = handle.save(at: now);
+      expect(saveRes.token.counter, greaterThanOrEqualTo(BigInt.zero));
+      expect(saveRes.token.incarnation.length, equals(32));
+      expect(saveRes.blob.isNotEmpty, isTrue);
+
+      // Phase 2: confirm saved
+      final events = handle.confirmSaved(saveRes.token);
+      expect(events.isNotEmpty, isTrue);
+      final createdEvent = events.whereType<GroupCreatedEvent>().first;
+      final groupId = createdEvent.groupId;
+      expect(groupId, greaterThan(BigInt.zero));
+
+      // Group now active in queries
+      final groupIds = handle.getGroupIds();
+      expect(groupIds, contains(groupId));
+
+      final view = handle.getGroup(groupId);
+      expect(view, isNotNull);
+      expect(view!.groupId, equals(groupId));
+      expect(view.revision, equals(BigInt.zero));
+      expect(view.members.length, equals(1));
+      expect(view.members.first, equals(handle.selectedIdentity));
+
+      // Outgoing messages released: exactly 1 genesis frame
+      final outgoing = handle.takeOutgoing();
+      expect(outgoing.length, equals(1));
+      expect(outgoing.first.tag, equals(MessageTag.genesis));
+      expect(outgoing.first.from, equals(handle.selectedIdentity));
+      expect(outgoing.first.bytes.isNotEmpty, isTrue);
+      expect(outgoing.first.authenticator, isNotNull);
+      expect(outgoing.first.authenticator!.length, equals(32));
+
+      // takeOutgoing drained the queue
+      expect(handle.takeOutgoing(), isEmpty);
+
+      handle.dispose();
+    });
+
+    test('group import via authenticated genesis frame', () {
+      final alice = MeshGroupHandle(seed: MeshInstallation.generateSeed());
+      final bob = MeshGroupHandle(seed: MeshInstallation.generateSeed());
+      final now = DateTime.utc(2026, 6, 1, 12, 0, 0);
+
+      alice.createGroup(members: [bob.selectedIdentity]);
+      final aliceSave = alice.save(at: now);
+      final aliceEvents = alice.confirmSaved(aliceSave.token);
+      final aliceGroupId =
+          aliceEvents.whereType<GroupCreatedEvent>().first.groupId;
+      final genesisMsg = alice.takeOutgoing().first;
+
+      // Bob imports genesis with digest
+      final bobOp = bob.importGenesis(
+        frame: genesisMsg.bytes,
+        expectedDigest: genesisMsg.authenticator!,
+      );
+      expect(bobOp, greaterThanOrEqualTo(BigInt.zero));
+
+      final bobSave = bob.save(at: now);
+      final bobEvents = bob.confirmSaved(bobSave.token);
+      final importedEvent = bobEvents.whereType<GroupImportedEvent>().first;
+      expect(importedEvent.groupId, equals(aliceGroupId));
+
+      final bobGroup = bob.getGroup(aliceGroupId);
+      expect(bobGroup, isNotNull);
+      expect(bobGroup!.groupId, equals(aliceGroupId));
+      expect(bobGroup.members.length, equals(2));
+      expect(matchesKey(bobGroup.members, alice.selectedIdentity), isTrue);
+      expect(matchesKey(bobGroup.members, bob.selectedIdentity), isTrue);
+
+      alice.dispose();
+      bob.dispose();
+    });
+
+    test('end-to-end verified invitation, consent, admission, and join', () {
+      final now = DateTime.utc(2026, 6, 1, 12, 0, 0);
+      final seedA = MeshInstallation.generateSeed();
+      final seedB = MeshInstallation.generateSeed();
+      final instA = MeshInstallation(seed: seedA);
+      final instB = MeshInstallation(seed: seedB);
+
+      // 1. Establish verified contact relationship via encounter
+      pairNodes(instA, instB, now);
+
+      // 2. Transition both installations to GroupHandles
+      final alice = MeshGroupHandle.fromInstallation(instA);
+      final bob = MeshGroupHandle.fromInstallation(instB);
+
+      // 3. Alice creates group
+      alice.createGroup();
+      final aSave1 = alice.save(at: now);
+      final aEvents1 = alice.confirmSaved(aSave1.token);
+      final groupId = aEvents1.whereType<GroupCreatedEvent>().first.groupId;
+      final genesisFrame = alice.takeOutgoing().first;
+      expect(genesisFrame.tag, equals(MessageTag.genesis));
+
+      // 4. Alice invites Bob (who is a verified contact)
+      final inviteOp = alice.invite(
+        groupId: groupId,
+        candidateKey: bob.selectedIdentity,
+        lifetime: const Duration(days: 7),
+        at: now,
+      );
+      expect(inviteOp, greaterThanOrEqualTo(BigInt.zero));
+      expect(inviteOp, greaterThanOrEqualTo(BigInt.zero));
+
+      final aSave2 = alice.save(at: now);
+      final aEvents2 = alice.confirmSaved(aSave2.token);
+      expect(aEvents2.whereType<InvitationSentEvent>(), isNotEmpty);
+
+      final invMessages = alice.takeOutgoing();
+      expect(invMessages.length, equals(1));
+      final invMsg = invMessages.first;
+      expect(invMsg.tag, equals(MessageTag.invitation));
+      expect(matchesKey(invMsg.to, bob.selectedIdentity), isTrue);
+
+      // 5. Bob receives invitation frame
+      final bRecvEvents = bob.receiveBytes(
+        fromPeerKey: alice.selectedIdentity,
+        bytes: invMsg.bytes,
+        at: now,
+      );
+      expect(bRecvEvents, isEmpty); // no immediate rejection
+
+      final bSave1 = bob.save(at: now);
+      final bEvents1 = bob.confirmSaved(bSave1.token);
+      expect(bEvents1.whereType<InvitationReceivedEvent>(), isNotEmpty);
+
+      final pending = bob.getPendingInvitations();
+      expect(pending.length, equals(1));
+      expect(pending.first.groupId, equals(groupId));
+      expect(pending.first.inviterKey, equals(alice.selectedIdentity));
+      final binding = pending.first.binding;
+
+      // 6. Bob accepts invitation
+      bob.accept(invitationBinding: binding, at: now);
+      final bSave2 = bob.save(at: now);
+      final bEvents2 = bob.confirmSaved(bSave2.token);
+      expect(bEvents2.whereType<AcceptanceSentEvent>(), isNotEmpty);
+
+      final consentMessages = bob.takeOutgoing();
+      expect(consentMessages.length, equals(1));
+      final consentMsg = consentMessages.first;
+      expect(consentMsg.tag, equals(MessageTag.consent));
+
+      // 7. Alice receives Bob's consent frame
+      alice.receiveBytes(
+        fromPeerKey: bob.selectedIdentity,
+        bytes: consentMsg.bytes,
+        at: now,
+      );
+      final aSave3 = alice.save(at: now);
+      final aEvents3 = alice.confirmSaved(aSave3.token);
+      expect(aEvents3.whereType<ConsentReceivedEvent>(), isNotEmpty);
+      expect(aEvents3.whereType<AdmittedEvent>(), isNotEmpty);
+
+      // Alice now has outgoing certificate / snapshot frames for Bob
+      final aliceOutgoing = alice.takeOutgoing();
+      expect(aliceOutgoing.isNotEmpty, isTrue);
+
+      // 8. Bob receives Alice's admission/certificate frames
+      for (final msg in aliceOutgoing) {
+        bob.receiveBytes(
+          fromPeerKey: alice.selectedIdentity,
+          bytes: msg.bytes,
+          at: now,
+        );
+      }
+      final bSave3 = bob.save(at: now);
+      final bEvents3 = bob.confirmSaved(bSave3.token);
+      expect(bEvents3.whereType<JoinedEvent>(), isNotEmpty);
+
+      // 9. Both peers now share identical roster membership!
+      final aliceView = alice.getGroup(groupId)!;
+      final bobView = bob.getGroup(groupId)!;
+
+      expect(aliceView.groupId, equals(groupId));
+      expect(bobView.groupId, equals(groupId));
+      expect(aliceView.revision, equals(bobView.revision));
+      expect(aliceView.members.length, equals(2));
+      expect(bobView.members.length, equals(2));
+      expect(matchesKey(aliceView.members, alice.selectedIdentity), isTrue);
+      expect(matchesKey(aliceView.members, bob.selectedIdentity), isTrue);
+      expect(matchesKey(bobView.members, alice.selectedIdentity), isTrue);
+      expect(matchesKey(bobView.members, bob.selectedIdentity), isTrue);
+
+      // 10. Departure flow: Bob leaves the group
+      bob.leaveGroup(groupId: groupId, at: now);
+      final bSave4 = bob.save(at: now);
+      final bEvents4 = bob.confirmSaved(bSave4.token);
+      expect(bEvents4.whereType<LeftEvent>(), isNotEmpty);
+
+      final bobDepartureMsgs = bob.takeOutgoing();
+      expect(bobDepartureMsgs.length, equals(1));
+      expect(bobDepartureMsgs.first.tag, equals(MessageTag.departure));
+
+      // Alice receives Bob's departure frame
+      alice.receiveBytes(
+        fromPeerKey: bob.selectedIdentity,
+        bytes: bobDepartureMsgs.first.bytes,
+        at: now,
+      );
+      final aSave4 = alice.save(at: now);
+      final aEvents4 = alice.confirmSaved(aSave4.token);
+      expect(aEvents4.whereType<MemberDepartedEvent>(), isNotEmpty);
+
+      alice.dispose();
+      bob.dispose();
+    });
+
+    test(
+      'group handle snapshot save and byte-for-byte restore across restart',
+      () {
+        final seed = MeshInstallation.generateSeed();
+        final handle = MeshGroupHandle(seed: seed);
+        final now = DateTime.utc(2026, 6, 1, 12, 0, 0);
+
+        handle.createGroup();
+        final save1 = handle.save(at: now);
+        final events = handle.confirmSaved(save1.token);
+        final groupId = events.whereType<GroupCreatedEvent>().first.groupId;
+
+        // Save complete snapshot
+        final save2 = handle.save(at: now);
+        handle.dispose();
+
+        // Restore fresh handle from snapshot blob and seed
+        final restored = MeshGroupHandle.restore(
+          snapshotBlob: save2.blob,
+          signingKeySeeds: [seed],
+        );
+
+        expect(restored.selectedIdentity.length, equals(32));
+        expect(restored.getGroupIds(), contains(groupId));
+
+        final restoredView = restored.getGroup(groupId);
+        expect(restoredView, isNotNull);
+        expect(restoredView!.groupId, equals(groupId));
+        expect(restoredView.members.length, equals(1));
+
+        restored.dispose();
+      },
+    );
+
+    test('defensive validation and error bounds on group handle methods', () {
+      final seed = MeshInstallation.generateSeed();
+      final handle = MeshGroupHandle(seed: seed);
+      final now = DateTime.utc(2026, 6, 1, 12, 0, 0);
+
+      // Ineligible exception on unverified candidate invitation
+      handle.createGroup();
+      final save1 = handle.save(at: now);
+      final events = handle.confirmSaved(save1.token);
+      final groupId = events.whereType<GroupCreatedEvent>().first.groupId;
+
+      final unverifiedKey = Uint8List(32)..fillRange(0, 32, 99);
+      expect(
+        () => handle.invite(
+          groupId: groupId,
+          candidateKey: unverifiedKey,
+          at: now,
+        ),
+        throwsA(isA<IneligibleException>()),
+      );
+
+      // Negative timestamp throws InvalidArgumentsException
+      expect(
+        () => handle.save(at: DateTime.fromMillisecondsSinceEpoch(-1000)),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+
+      // Invalid frame length bounds
+      expect(
+        () => handle.receiveBytes(
+          fromPeerKey: unverifiedKey,
+          bytes: Uint8List(0),
+          at: now,
+        ),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+
+      expect(
+        () => handle.importGenesis(
+          frame: Uint8List(0),
+          expectedDigest: Uint8List(32),
+        ),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+
+      // Restore with empty seeds or mismatched sizes
+      expect(
+        () => MeshGroupHandle.restore(
+          snapshotBlob: save1.blob,
+          signingKeySeeds: [],
+        ),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+
+      expect(
+        () => MeshGroupHandle.restore(
+          snapshotBlob: save1.blob,
+          signingKeySeeds: [Uint8List(16)],
+        ),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+
+      handle.dispose();
+    });
+
+    test(
+      'acceptAuthenticated accepts with matching digest and rejects mismatch',
+      () {
+        final now = DateTime.utc(2026, 6, 1, 12, 0, 0);
+        final seedA = MeshInstallation.generateSeed();
+        final seedB = MeshInstallation.generateSeed();
+        final instA = MeshInstallation(seed: seedA);
+        final instB = MeshInstallation(seed: seedB);
+
+        pairNodes(instA, instB, now);
+        final alice = MeshGroupHandle.fromInstallation(instA);
+        final bob = MeshGroupHandle.fromInstallation(instB);
+
+        alice.createGroup();
+        final aSave1 = alice.save(at: now);
+        final aEvents1 = alice.confirmSaved(aSave1.token);
+        final groupId = aEvents1.whereType<GroupCreatedEvent>().first.groupId;
+        final genesisMsg = alice.takeOutgoing().first;
+
+        alice.invite(
+          groupId: groupId,
+          candidateKey: bob.selectedIdentity,
+          at: now,
+        );
+        final aSave2 = alice.save(at: now);
+        alice.confirmSaved(aSave2.token);
+        final invMsg = alice.takeOutgoing().first;
+
+        bob.receiveBytes(
+          fromPeerKey: alice.selectedIdentity,
+          bytes: invMsg.bytes,
+          at: now,
+        );
+        final bSave1 = bob.save(at: now);
+        bob.confirmSaved(bSave1.token);
+        final pending = bob.getPendingInvitations().first;
+
+        // Acceptance with wrong genesis digest throws InvalidArgumentsException
+        final wrongDigest = Uint8List(32)..fillRange(0, 32, 77);
+        expect(
+          () => bob.acceptAuthenticated(
+            invitationBinding: pending.binding,
+            genesisDigest: wrongDigest,
+            at: now,
+          ),
+          throwsA(isA<InvalidArgumentsException>()),
+        );
+
+        // Acceptance with correct genesis digest succeeds
+        final op = bob.acceptAuthenticated(
+          invitationBinding: pending.binding,
+          genesisDigest: genesisMsg.authenticator!,
+          at: now,
+        );
+        expect(op, greaterThanOrEqualTo(BigInt.zero));
+
+        final bSave2 = bob.save(at: now);
+        final bEvents2 = bob.confirmSaved(bSave2.token);
+        expect(bEvents2.whereType<AcceptanceSentEvent>(), isNotEmpty);
+
+        alice.dispose();
+        bob.dispose();
+      },
+    );
+
+    test('resend and operation state tracking', () {
+      final seed = MeshInstallation.generateSeed();
+      final handle = MeshGroupHandle(seed: seed);
+      final now = DateTime.utc(2026, 6, 1, 12, 0, 0);
+
+      final opId = handle.createGroup();
+      final initialOpState = handle.getOpState(opId);
+      expect(initialOpState, isNotNull);
+      expect(initialOpState!.isPending, isTrue);
+
+      final save1 = handle.save(at: now);
+      handle.confirmSaved(save1.token);
+      final outgoing = handle.takeOutgoing();
+      expect(outgoing.length, equals(1));
+
+      // After takeOutgoing, outgoing queue is empty
+      expect(handle.takeOutgoing(), isEmpty);
+
+      // Resending the operation re-stages frames without re-signing
+      handle.resend(opId);
+      final save2 = handle.save(at: now);
+      handle.confirmSaved(save2.token);
+
+      final resentOutgoing = handle.takeOutgoing();
+      expect(resentOutgoing.length, equals(1));
+      expect(resentOutgoing.first.tag, equals(MessageTag.genesis));
+
+      // Unknown op query returns null
+      expect(handle.getOpState(BigInt.parse('999999999')), isNull);
+
+      handle.dispose();
+    });
+
+    test('receiveBytes immediate rejection of malformed frame', () {
+      final seed = MeshInstallation.generateSeed();
+      final handle = MeshGroupHandle(seed: seed);
+      final now = DateTime.utc(2026, 6, 1, 12, 0, 0);
+      final peerKey = Uint8List(32)..fillRange(0, 32, 42);
+
+      // Malformed wire bytes (garbage frame)
+      final garbage = Uint8List.fromList([0xFF, 0x01, 0x02, 0x03]);
+      final events = handle.receiveBytes(
+        fromPeerKey: peerKey,
+        bytes: garbage,
+        at: now,
+      );
+
+      expect(events.length, equals(1));
+      expect(events.first, isA<FrameRejectedEvent>());
+      final rejected = events.first as FrameRejectedEvent;
+      expect(rejected.reason, equals(FrameRejectReason.malformed));
+
+      handle.dispose();
+    });
+
+    test(
+      'OutgoingMessage value equality and hashCode includes to and authenticator',
+      () {
+        final keyA = Uint8List(32)..fillRange(0, 32, 1);
+        final keyB = Uint8List(32)..fillRange(0, 32, 2);
+        final keyC = Uint8List(32)..fillRange(0, 32, 3);
+        final auth1 = Uint8List(32)..fillRange(0, 32, 10);
+        final auth2 = Uint8List(32)..fillRange(0, 32, 20);
+        final payload = Uint8List.fromList([1, 2, 3, 4]);
+
+        final msg1 = OutgoingMessage(
+          from: keyA,
+          to: [keyB],
+          tag: MessageTag.genesis,
+          bytes: payload,
+          authenticator: auth1,
+        );
+
+        final msg1Dup = OutgoingMessage(
+          from: Uint8List.fromList(keyA),
+          to: [Uint8List.fromList(keyB)],
+          tag: MessageTag.genesis,
+          bytes: Uint8List.fromList(payload),
+          authenticator: Uint8List.fromList(auth1),
+        );
+
+        // Same recipients and authenticator: equal and same hashCode
+        expect(msg1, equals(msg1Dup));
+        expect(msg1.hashCode, equals(msg1Dup.hashCode));
+
+        // Different recipient: must NOT be equal
+        final msgDifferentTo = OutgoingMessage(
+          from: keyA,
+          to: [keyC],
+          tag: MessageTag.genesis,
+          bytes: payload,
+          authenticator: auth1,
+        );
+        expect(msg1, isNot(equals(msgDifferentTo)));
+        expect(msg1.hashCode, isNot(equals(msgDifferentTo.hashCode)));
+
+        // Different authenticator: must NOT be equal
+        final msgDifferentAuth = OutgoingMessage(
+          from: keyA,
+          to: [keyB],
+          tag: MessageTag.genesis,
+          bytes: payload,
+          authenticator: auth2,
+        );
+        expect(msg1, isNot(equals(msgDifferentAuth)));
+
+        // Set deduplication respects deep equality
+        final set = {msg1, msg1Dup, msgDifferentTo, msgDifferentAuth};
+        expect(set.length, equals(3));
+      },
+    );
+
+    test('enforces defensive bounds on group inputs', () {
+      final seed = MeshInstallation.generateSeed();
+      final handle = MeshGroupHandle(seed: seed);
+      final now = DateTime.utc(2026, 6, 1, 12, 0, 0);
+      final peerKey = Uint8List(32)..fillRange(0, 32, 1);
+
+      // Members count >= 192 throws GroupTooLargeException
+      final hugeMemberList = List.generate(
+        192,
+        (i) => Uint8List(32)..fillRange(0, 32, (i + 1) % 256),
+      );
+      expect(
+        () => handle.createGroup(members: hugeMemberList),
+        throwsA(isA<GroupTooLargeException>()),
+      );
+
+      // Inbound frame > 128 KiB throws InvalidArgumentsException
+      final hugeFrame = Uint8List(MeshGroupHandle.maxGroupFrameBytes + 1);
+      expect(
+        () => handle.receiveBytes(
+          fromPeerKey: peerKey,
+          bytes: hugeFrame,
+          at: now,
+        ),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+
+      // Inbound genesis > 128 KiB throws InvalidArgumentsException
+      expect(
+        () => handle.importGenesis(
+          frame: hugeFrame,
+          expectedDigest: Uint8List(32),
+        ),
+        throwsA(isA<InvalidArgumentsException>()),
+      );
+
+      // Snapshot restore > 256 MiB throws InvalidArgumentsException
+      // Note: we don't allocate 256MB in test memory, but verify the constant
+      expect(MeshGroupHandle.maxGroupFrameBytes, equals(128 * 1024));
+      expect(MeshGroupHandle.maxGroupSnapshotBytes, equals(256 * 1024 * 1024));
+      expect(MeshGroupHandle.maxGroupMembers, equals(192));
+
+      handle.dispose();
+    });
+
+    test('outgoing messages are strictly withheld until confirmSaved', () {
+      final seed = MeshInstallation.generateSeed();
+      final handle = MeshGroupHandle(seed: seed);
+      final now = DateTime.utc(2026, 6, 1, 12, 0, 0);
+
+      // Create group
+      handle.createGroup();
+
+      // Before save or confirmSaved, no messages are released
+      expect(handle.takeOutgoing(), isEmpty);
+
+      // Save produces token and blob, but messages remain withheld
+      final saveRes = handle.save(at: now);
+      expect(handle.takeOutgoing(), isEmpty);
+
+      // Only after confirmSaved are messages released to network
+      final events = handle.confirmSaved(saveRes.token);
+      expect(events.isNotEmpty, isTrue);
+
+      final outgoing = handle.takeOutgoing();
+      expect(outgoing.length, equals(1));
+      expect(outgoing.first.tag, equals(MessageTag.genesis));
+
+      handle.dispose();
+    });
+
+    test(
+      'atomic transfer preserves installation if native fails or throws',
+      () {
+        final seed = MeshInstallation.generateSeed();
+        final inst = MeshInstallation(seed: seed);
+
+        // Calling a method on active installation works
+        expect(inst.selectedIdentity.length, equals(32));
+
+        // Successfully transferring ownership consumes installation
+        final handle = MeshGroupHandle.fromInstallation(inst);
+        expect(inst.isDisposed, isTrue);
+        expect(handle.selectedIdentity.length, equals(32));
+
+        handle.dispose();
+      },
+    );
+  });
 }

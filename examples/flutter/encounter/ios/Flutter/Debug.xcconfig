@@ -1,0 +1,3 @@
+#include "Generated.xcconfig"
+APP_BUNDLE_ID = org.mesh.identity.encounter
+#include? "AppId.xcconfig"

@@ -1,0 +1,3 @@
+// Example override for Mac App Store builds.
+// Copy this file to AppId.xcconfig (which is gitignored) and set your private store identifier:
+PRODUCT_BUNDLE_IDENTIFIER = com.yourcompany.encounter

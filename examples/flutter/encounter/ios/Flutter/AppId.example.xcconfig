@@ -1,0 +1,4 @@
+// Example override for iOS App Store builds.
+// Copy this file to AppId.xcconfig (which is gitignored) and set your private store identifier and team:
+APP_BUNDLE_ID = com.yourcompany.encounter
+// DEVELOPMENT_TEAM = YOUR_APPLE_TEAM_ID

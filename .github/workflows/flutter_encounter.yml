@@ -1,0 +1,49 @@
+name: Flutter Encounter CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'examples/flutter/encounter/**'
+      - '.github/workflows/flutter_encounter.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'examples/flutter/encounter/**'
+      - '.github/workflows/flutter_encounter.yml'
+
+jobs:
+  test:
+    name: Flutter Analyze & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+
+      - name: Install dependencies
+        working-directory: examples/flutter/encounter
+        run: flutter pub get
+
+      - name: Verify formatting
+        working-directory: examples/flutter/encounter
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Analyze code
+        working-directory: examples/flutter/encounter
+        run: flutter analyze --fatal-infos
+
+      - name: Run tests
+        working-directory: examples/flutter/encounter
+        run: flutter test

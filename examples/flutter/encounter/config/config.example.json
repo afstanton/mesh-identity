@@ -1,0 +1,8 @@
+{
+  "APP_NAME": "Encounter",
+  "REPO_URL": "https://github.com/afstanton/mesh-identity",
+  "ENABLE_ANALYTICS": false,
+  "ANALYTICS_KEY": "",
+  "ENABLE_CRASH_REPORTING": false,
+  "CRASH_REPORTING_KEY": ""
+}

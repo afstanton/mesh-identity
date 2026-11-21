@@ -20,29 +20,31 @@ mesh-identity
 
 ### Feature Flags
 
-* `default = []`: Builds the lightweight Core identity library with zero group or OpenPGP dependencies.
-* `groups`: Enables group admission, PBFT-style roster consensus, quorum certificates, handle state machines, and voter locks.
-* `openpgp`: Enables OpenPGP interoperability powered by `rpgp` (pure Rust, MIT/Apache-2.0, zero C/OpenSSL dependencies).
+* `default = []`: Builds the Core identity library with zero external group or OpenPGP dependencies (active in Milestone X2).
+* `groups`: Enables group admission, PBFT-style roster consensus, quorum certificates, handle state machines, and voter locks (scheduled for Milestone X3).
+* `openpgp`: Enables OpenPGP interoperability powered by `rpgp` (pure Rust, MIT/Apache-2.0, zero C/OpenSSL dependencies, scheduled for Milestone X4).
 * `test-support`: Enables test-only simulation fixtures and reduced SAS campaign moduli. Never enabled in production.
 
 ---
 
-## Core Capabilities
+## Capabilities & Roadmap
 
-### 1. Peer Identity & Encounters (Core)
-* **Local Personas:** Ed25519 signing keys and X25519 diffie-hellman key agreements.
+### 1. Peer Identity & Encounters (Core — Milestone X2)
+* **Local Personas:** Ed25519 signing keys and X25519 Diffie-Hellman key agreements.
 * **Offline Encounter Protocol:** Two-device mutual authentication over QR codes or chunked BLE frames with Short Authentication String (SAS) human verification.
 * **Pairwise Link Disclosure:** Proving and linking multiple local personas belonging to the same individual without global identifiers.
 * **Installation Persistence:** Atomic snapshot save/restore with deterministic CBOR (`cbor2`) ensuring state is bounded and restorable within a 64 MiB ceiling.
+* **Resource Invariants:** Strictly enforced ceilings on contacts (100k), aliases (64 B), seen transcripts (262k with oldest eviction), and handoff bundles (5 MiB).
+* **Cooperative Handoff:** Secure transfer of group signing roles between devices without equivocation.
 
-### 2. Group Admission & Roster Governance (`groups`)
+### 2. Group Admission & Roster Governance (`groups` — Milestone X3)
 * **Byzantine Agreement:** Quorum-based roster changes with prepare, commit, and round-change phases.
 * **Proof-Carrying Certificates:** Verifiable membership certificates supporting up to 192 members and 128 signers per phase.
 * **Equivocation Protection:** Persistent voter lock tables (`roster_locks`) preventing signers from issuing contradictory votes across restarts.
 * **Group Handle:** Complete high-level facade for creating groups, issuing invitations, voting, and processing incoming wire bytes.
 
-### 3. OpenPGP Interoperability (`openpgp`)
-* **Key Import:** Import existing Ed25519 OpenPGP secret keys into local `mesh-identity` personas.
+### 3. OpenPGP Interoperability (`openpgp` — Milestone X4)
+* **Key Import:** Import existing Ed25519 OpenPGP secret keys into local `mesh-identity` personas using `rpgp`.
 * **Detached Signatures:** Issue standard OpenPGP document signatures and peer certifications using the local identity.
 
 ---

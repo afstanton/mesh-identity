@@ -2,8 +2,11 @@
 name = "mesh-identity"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 license = "MIT"
 description = "Peer identity, offline encounters, and Byzantine group admission governance."
+repository = "https://github.com/afstanton/mesh-identity"
+readme = "README.md"
 
 [dependencies]
 # Cryptography
@@ -17,7 +20,7 @@ zeroize = { version = "1", features = ["derive"] }
 # Serialization & encoding
 cbor2 = "1.2"
 serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
+serde_bytes = "0.11"
 base64 = "0.22"
 
 # OpenPGP interoperability (pure Rust, optional)
@@ -27,6 +30,7 @@ pgp = { version = "0.21", optional = true }
 hex-literal = "0.4"
 sha1_smol = "1"
 ring = "0.17"
+serde_json = "1.0"
 
 [features]
 default = []

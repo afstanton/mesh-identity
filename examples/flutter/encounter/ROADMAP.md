@@ -16,7 +16,7 @@ This roadmap breaks down the development of **Encounter** (`code/mesh-identity/e
 
 ## Slice Breakdown
 
-- [ ] **Slice 1: Core Node Controller & Persistence Architecture**
+- [x] **Slice 1: Core Node Controller & Persistence Architecture**
   - Establish `SecureKeyringService` (secure seed storage) and `SnapshotStorageService` (atomic `.tmp` + rename file persistence).
   - Single `IdentityController` (`ChangeNotifier`) owning the live `MeshInstallation`.
   - Cold-start restore, seed generation, persona switching, and corruption recovery states.

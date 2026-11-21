@@ -555,6 +555,15 @@ impl Installation {
         self.current.key.verifying_key().to_bytes()
     }
 
+    /// Return all identities registered in this installation (the selected identity first,
+    /// followed by inactive identities).
+    pub fn identities(&self) -> Vec<Identity> {
+        let mut list = Vec::with_capacity(1 + self.inactive.len());
+        list.push(self.selected());
+        list.extend(self.inactive.keys().copied());
+        list
+    }
+
     pub fn max_identities(&self) -> usize {
         self.max_identities
     }

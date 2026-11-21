@@ -1,0 +1,57 @@
+name: Dart Bindings CI
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'bindings/dart/**'
+      - 'src/**'
+      - 'Cargo.*'
+      - '.github/workflows/dart.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'bindings/dart/**'
+      - 'src/**'
+      - 'Cargo.*'
+      - '.github/workflows/dart.yml'
+
+jobs:
+  test:
+    name: Dart Analyze & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Dart SDK
+        uses: dart-lang/setup-dart@v1
+        with:
+          sdk: stable
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@1.100.0
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: bindings/dart/mesh_identity/native
+
+      - name: Install Dart dependencies
+        working-directory: bindings/dart/mesh_identity
+        run: dart pub get
+
+      - name: Verify formatting
+        working-directory: bindings/dart/mesh_identity
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Analyze code
+        working-directory: bindings/dart/mesh_identity
+        run: dart analyze --fatal-infos
+
+      - name: Run tests
+        working-directory: bindings/dart/mesh_identity
+        run: dart test

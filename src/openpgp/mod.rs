@@ -483,5 +483,4 @@ fn issue_profile(
 mod import;
 pub use import::{ImportError, MAX_CERTIFICATE_BYTES, Provenance, import_owned, import_peer};
 mod revocations;
-pub use revocations::PeerRevocations;
-pub use revocations::remember_peer_revocations;
+pub use revocations::{PeerRevocations, PeerRevocationsWire, remember_peer_revocations};

@@ -64,6 +64,12 @@ struct SnapshotWire {
     historical_voting: Vec<(Identity, VotingRecord)>,
     #[serde(with = "crate::cbor::byte_seq::opt_array32")]
     device_nonce: Option<[u8; 32]>,
+    #[cfg(feature = "openpgp")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    openpgp_revocations: Option<crate::openpgp::PeerRevocationsWire>,
+    #[cfg(not(feature = "openpgp"))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    openpgp_revocations: Option<cbor2::Value>,
 }
 
 mod vec_identity_voting {
@@ -113,22 +119,17 @@ mod vec_identity_voting {
 impl InstallationSnapshot {
     /// Deterministic bytes: the same state always saves to the same document.
     pub fn to_bytes(&self) -> Result<Vec<u8>, SnapshotError> {
-        self.to_bytes_checked(
-            #[cfg(feature = "openpgp")]
-            self.openpgp_revocations.is_empty(),
-        )
-    }
-
-    fn to_bytes_checked(
-        &self,
-        #[cfg(feature = "openpgp")] revocations_empty: bool,
-    ) -> Result<Vec<u8>, SnapshotError> {
-        #[cfg(feature = "openpgp")]
-        if !revocations_empty {
-            return Err(SnapshotError::Unsupported);
-        }
         let mut stores: Vec<_> = self.contacts.values().map(ContactStore::to_wire).collect();
         stores.sort_by_key(|store| store.local_identity);
+        #[cfg(feature = "openpgp")]
+        let openpgp_revocations = if self.openpgp_revocations.is_empty() {
+            None
+        } else {
+            Some(self.openpgp_revocations.to_wire())
+        };
+        #[cfg(not(feature = "openpgp"))]
+        let openpgp_revocations = None;
+
         let wire = SnapshotWire {
             version: SNAPSHOT_VERSION,
             selected: self.selected,
@@ -149,6 +150,7 @@ impl InstallationSnapshot {
                 .map(|(identity, record)| (*identity, record.clone()))
                 .collect(),
             device_nonce: self.device_nonce,
+            openpgp_revocations,
         };
         let bytes = cbor2::to_vec(&wire).map_err(|_| SnapshotError::Invalid)?;
         if bytes.len() > MAX_SNAPSHOT_BYTES {
@@ -226,12 +228,18 @@ impl InstallationSnapshot {
         {
             return Err(SnapshotError::Invalid);
         }
+        #[cfg(feature = "openpgp")]
+        let openpgp_revocations = match wire.openpgp_revocations {
+            Some(wire_rev) => crate::openpgp::PeerRevocations::from_wire(wire_rev)
+                .map_err(|_| SnapshotError::Invalid)?,
+            None => Default::default(),
+        };
         Ok(Self {
             selected: wire.selected,
             contacts,
             policy: wire.policy,
             #[cfg(feature = "openpgp")]
-            openpgp_revocations: Default::default(),
+            openpgp_revocations,
             roster_locks: wire.roster_locks,
             roster_signing_disabled: wire.roster_signing_disabled,
             roster_unconfirmed,
@@ -262,7 +270,7 @@ impl super::Installation {
             contacts,
             policy: self.current.contacts.attempt_policy_state(),
             #[cfg(feature = "openpgp")]
-            openpgp_revocations: Default::default(),
+            openpgp_revocations: self.openpgp_revocations.clone(),
             roster_locks: self
                 .roster_locks
                 .lock()
@@ -275,10 +283,7 @@ impl super::Installation {
             historical_voting: self.historical_voting.clone(),
             device_nonce: self.device_nonce,
         }
-        .to_bytes_checked(
-            #[cfg(feature = "openpgp")]
-            self.openpgp_revocations.is_empty(),
-        )
+        .to_bytes()
     }
 
     /// Restart from bytes written by `save_bytes` or `to_bytes`. Pure: a refusal changes nothing.

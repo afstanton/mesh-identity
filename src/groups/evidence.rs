@@ -1,4 +1,4 @@
-//! Encounter-backed evidence for the ordered admission experiment.
+//! Encounter-backed evidence for ordered group admission governance.
 //! The public API groups signed evidence and authenticated roster transitions.
 
 use crate::contact::ContactStatus;

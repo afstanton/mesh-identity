@@ -667,3 +667,47 @@ fn test_default_identity_limit_enforced() {
     i.set_max_identities(32).unwrap();
     assert!(i.add_identity(SigningKey::from_bytes(&[17u8; 32])).is_ok());
 }
+
+#[test]
+fn test_roster_lock_ceiling_enforced_on_retirement_and_saves_cleanly() {
+    let key = SigningKey::from_bytes(&[50u8; 32]);
+    let inst = Installation::new(key.clone());
+    let head = [255u8; 32];
+
+    // Retire up to MAX_ROSTER_LOCKS (8,192) parents
+    for i in 0..8192u32 {
+        let mut parent = [0u8; 32];
+        parent[0..4].copy_from_slice(&i.to_be_bytes());
+        assert!(inst.retire_roster_parent(1, parent, head).is_ok());
+    }
+
+    // Retiring the 8,193rd parent must be rejected to prevent unrestorable snapshots
+    let mut overflow_parent = [0u8; 32];
+    overflow_parent[0..4].copy_from_slice(&8192u32.to_be_bytes());
+    assert_eq!(
+        inst.retire_roster_parent(1, overflow_parent, head).err(),
+        Some(Error::ConflictingRosterVote)
+    );
+
+    // Save and restore must succeed with the exactly capped table
+    let mut inst_mut = inst;
+    let saved = inst_mut.save_bytes(0).unwrap();
+    let restored = Installation::restore_bytes(&saved, [key.clone()]).unwrap();
+    assert_eq!(restored.selected(), key.verifying_key().to_bytes());
+}
+
+#[test]
+fn test_aggregate_seen_transcripts_budget_across_multiple_identities() {
+    let key1 = SigningKey::from_bytes(&[60u8; 32]);
+    let key2 = SigningKey::from_bytes(&[61u8; 32]);
+    let mut inst = Installation::new(key1.clone());
+    inst.add_identity(key2.clone()).unwrap();
+
+    // Verify aggregate seen transcript count is bounded across both stores
+    assert_eq!(inst.total_seen_transcripts(), 0);
+
+    // Save and restore succeeds
+    let saved = inst.save_bytes(0).unwrap();
+    let restored = Installation::restore_bytes(&saved, [key1, key2]).unwrap();
+    assert_eq!(restored.total_seen_transcripts(), 0);
+}

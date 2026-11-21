@@ -216,6 +216,19 @@ impl ContactStore {
         self.attempt_policy
     }
 
+    pub fn seen_transcripts_len(&self) -> usize {
+        self.seen_transcripts.len()
+    }
+
+    pub fn evict_oldest_transcript(&mut self) -> bool {
+        if let Some(oldest) = self.seen_order.pop_front() {
+            self.seen_transcripts.remove(&oldest);
+            true
+        } else {
+            false
+        }
+    }
+
     pub(crate) fn local_identity_pk(&self) -> [u8; 32] {
         self.local_identity_pk
     }

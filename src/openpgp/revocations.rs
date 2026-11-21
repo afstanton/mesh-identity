@@ -1,14 +1,30 @@
 use super::{ImportError, parse_public_peer};
 use crate::session::installation::Installation;
-use pgp::composed::SignedPublicKey;
+use pgp::composed::{Deserializable, DetachedSignature, SignedPublicKey};
 use pgp::packet::{Signature, SignatureType};
+use pgp::ser::Serialize as _;
 use pgp::types::{Fingerprint, KeyDetails, Tag};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 
 /// Slots for certificates that are not contacts. Contacts never compete for these.
 pub(crate) const MAX_UNKNOWN_CERTIFICATES: usize = 256;
 pub(crate) const MAX_PROTECTED_CERTIFICATES: usize = 256;
 pub(crate) const MAX_SIGNATURES_PER_CERTIFICATE: usize = 16;
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RevocationEntryWire {
+    pub version: u8,
+    #[serde(with = "serde_bytes")]
+    pub fingerprint: Vec<u8>,
+    pub signatures: Option<Vec<serde_bytes::ByteBuf>>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct PeerRevocationsWire {
+    pub protected: Vec<RevocationEntryWire>,
+    pub unknown: Vec<RevocationEntryWire>,
+}
 
 type Remembered = Option<Vec<Signature>>;
 
@@ -35,6 +51,129 @@ pub struct PeerRevocations {
 impl PeerRevocations {
     pub fn is_empty(&self) -> bool {
         self.protected.is_empty() && self.unknown.is_empty()
+    }
+
+    pub fn to_wire(&self) -> PeerRevocationsWire {
+        let mut protected: Vec<RevocationEntryWire> = self
+            .protected
+            .iter()
+            .map(|(fp, rem)| RevocationEntryWire {
+                version: match fp.version() {
+                    Some(pgp::types::KeyVersion::V2) => 2,
+                    Some(pgp::types::KeyVersion::V3) => 3,
+                    Some(pgp::types::KeyVersion::V4) => 4,
+                    Some(pgp::types::KeyVersion::V5) => 5,
+                    Some(pgp::types::KeyVersion::V6) => 6,
+                    _ => 4,
+                },
+                fingerprint: fp.as_bytes().to_vec(),
+                signatures: rem.as_ref().map(|sigs| {
+                    sigs.iter()
+                        .filter_map(|s| {
+                            DetachedSignature::new(s.clone())
+                                .to_bytes()
+                                .ok()
+                                .map(serde_bytes::ByteBuf::from)
+                        })
+                        .collect()
+                }),
+            })
+            .collect();
+        protected.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
+
+        let unknown: Vec<RevocationEntryWire> = self
+            .unknown_order
+            .iter()
+            .filter_map(|fp| {
+                let rem = self.unknown.get(fp)?;
+                Some(RevocationEntryWire {
+                    version: match fp.version() {
+                        Some(pgp::types::KeyVersion::V2) => 2,
+                        Some(pgp::types::KeyVersion::V3) => 3,
+                        Some(pgp::types::KeyVersion::V4) => 4,
+                        Some(pgp::types::KeyVersion::V5) => 5,
+                        Some(pgp::types::KeyVersion::V6) => 6,
+                        _ => 4,
+                    },
+                    fingerprint: fp.as_bytes().to_vec(),
+                    signatures: rem.as_ref().map(|sigs| {
+                        sigs.iter()
+                            .filter_map(|s| {
+                                DetachedSignature::new(s.clone())
+                                    .to_bytes()
+                                    .ok()
+                                    .map(serde_bytes::ByteBuf::from)
+                            })
+                            .collect()
+                    }),
+                })
+            })
+            .collect();
+
+        PeerRevocationsWire { protected, unknown }
+    }
+
+    pub fn from_wire(wire: PeerRevocationsWire) -> Result<Self, ImportError> {
+        if wire.protected.len() > MAX_PROTECTED_CERTIFICATES
+            || wire.unknown.len() > MAX_UNKNOWN_CERTIFICATES
+        {
+            return Err(ImportError::RevocationCapacity);
+        }
+
+        let parse_entry =
+            |entry: RevocationEntryWire| -> Result<(Fingerprint, Remembered), ImportError> {
+                let version = match entry.version {
+                    2 => pgp::types::KeyVersion::V2,
+                    3 => pgp::types::KeyVersion::V3,
+                    4 => pgp::types::KeyVersion::V4,
+                    5 => pgp::types::KeyVersion::V5,
+                    6 => pgp::types::KeyVersion::V6,
+                    _ => return Err(ImportError::InvalidBinding),
+                };
+                let fp = Fingerprint::new(version, &entry.fingerprint)
+                    .map_err(|_| ImportError::InvalidBinding)?;
+                let rem = match entry.signatures {
+                    None => None,
+                    Some(sigs_bytes) => {
+                        if sigs_bytes.len() > MAX_SIGNATURES_PER_CERTIFICATE {
+                            return Err(ImportError::RevocationCapacity);
+                        }
+                        let mut sigs = Vec::with_capacity(sigs_bytes.len());
+                        for b in sigs_bytes {
+                            let detached = DetachedSignature::from_bytes(&b[..])
+                                .map_err(|_| ImportError::InvalidBinding)?;
+                            sigs.push(detached.signature);
+                        }
+                        Some(sigs)
+                    }
+                };
+                Ok((fp, rem))
+            };
+
+        let mut protected = HashMap::new();
+        for entry in wire.protected {
+            let (fp, rem) = parse_entry(entry)?;
+            if protected.insert(fp, rem).is_some() {
+                return Err(ImportError::InvalidBinding);
+            }
+        }
+
+        let mut unknown = HashMap::new();
+        let mut unknown_order = VecDeque::new();
+        for entry in wire.unknown {
+            let (fp, rem) = parse_entry(entry)?;
+            if unknown.contains_key(&fp) {
+                return Err(ImportError::InvalidBinding);
+            }
+            unknown_order.push_back(fp.clone());
+            unknown.insert(fp, rem);
+        }
+
+        Ok(Self {
+            protected,
+            unknown,
+            unknown_order,
+        })
     }
 
     pub(super) fn merge(&self, mut cert: SignedPublicKey) -> Result<SignedPublicKey, ImportError> {

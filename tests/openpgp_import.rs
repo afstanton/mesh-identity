@@ -1073,3 +1073,32 @@ fn ordinary_import_remembers_unselected_uid_revocations_even_when_import_fails()
         ));
     }
 }
+
+#[test]
+fn openpgp_contact_import_preserves_snapshot_save_and_restore() {
+    let local_key = SigningKey::from_bytes(&[130; 32]);
+    let mut local = Installation::new(local_key.clone());
+    let peer_key = SigningKey::from_bytes(&[131; 32]);
+    let peer_expected = peer_key.verifying_key().to_bytes();
+    let uid = b"Saved Peer";
+    let created = 1_750_000_000;
+    let now = UNIX_EPOCH + Duration::from_secs(u64::from(created) + 1);
+    let cert = issue(&peer_key, uid, created, b"fixture", None)
+        .unwrap()
+        .certificate;
+    let mut rng = StdRng::seed_from_u64(42);
+
+    // Import unrevoked OpenPGP contact
+    let (record, provenance) =
+        import_peer(&mut local, &cert, peer_expected, uid, now, &mut rng).unwrap();
+    assert_eq!(record.peer_ed25519_pk, peer_expected);
+    assert_eq!(provenance.primary, provenance.signing_key);
+
+    // Snapshot save MUST succeed (Codex finding 1 regression test)
+    let saved = local.save_bytes(u64::from(created) + 10).unwrap();
+    assert!(!saved.is_empty());
+
+    // Restore from saved bytes MUST succeed and keep the contact
+    let restored = Installation::restore_bytes(&saved, [local_key]).unwrap();
+    assert_eq!(restored.total_contacts(), 1);
+}

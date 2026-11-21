@@ -320,7 +320,7 @@ impl VouchedGroup {
     }
 
     /// Propose ejection under the complementary admission threshold.
-    /// The experimental rule applies to feasible numeric policies.
+    /// The admission rule applies to feasible numeric policies.
     pub(crate) fn propose_ejection(
         &self,
         proposer: Key,

@@ -553,6 +553,15 @@ impl Installation {
                 .sum::<usize>()
     }
 
+    pub fn total_seen_transcripts(&self) -> usize {
+        self.current.contacts.seen_transcripts_len()
+            + self
+                .inactive
+                .values()
+                .map(|p| p.contacts.seen_transcripts_len())
+                .sum::<usize>()
+    }
+
     pub fn set_max_identities(&mut self, limit: usize) -> Result<(), Error> {
         let current_count = self.inactive.len() + 1;
         if limit > MAX_IDENTITIES_CEILING || limit < current_count {
@@ -873,6 +882,18 @@ impl Installation {
                 if self.current.contacts.get(&peer_pk).is_none() {
                     return Err(SessionError::Store(StoreError::StoreFull).into());
                 }
+            }
+        }
+        while self.total_seen_transcripts() >= crate::contact::MAX_SEEN_TRANSCRIPTS {
+            let mut evicted = false;
+            for persona in self.inactive.values_mut() {
+                if persona.contacts.evict_oldest_transcript() {
+                    evicted = true;
+                    break;
+                }
+            }
+            if !evicted && !self.current.contacts.evict_oldest_transcript() {
+                break;
             }
         }
         let result = self
@@ -1228,10 +1249,11 @@ impl Installation {
         if parent == head {
             return Err(Error::ConflictingRosterVote);
         }
-        self.roster_locks
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert((group, parent), RosterParentLocks::Retired);
+        let mut table = self.roster_locks.lock().unwrap_or_else(|e| e.into_inner());
+        if table.len() >= roster_locks::MAX_ROSTER_LOCKS && !table.contains_key(&(group, parent)) {
+            return Err(Error::ConflictingRosterVote);
+        }
+        table.insert((group, parent), RosterParentLocks::Retired);
         Ok(())
     }
 
@@ -1279,7 +1301,7 @@ impl Installation {
         Ok(self.current.key.sign(&message).to_bytes())
     }
 
-    /// Sign an experimental group voucher withdrawal as the selected identity.
+    /// Sign a group voucher withdrawal as the selected identity.
     pub fn sign_voucher_withdrawal(
         &self,
         group: u64,

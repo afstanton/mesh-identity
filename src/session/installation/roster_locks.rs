@@ -37,13 +37,12 @@ pub(super) type RosterLockTable = BTreeMap<Parent, RosterParentLocks>;
 pub(super) fn merge_checkpoint(current: &mut RosterLockTable, incoming: RosterLockTable) -> bool {
     let mut conflict = false;
     for (parent, incoming) in incoming {
-        match current.entry(parent) {
-            Entry::Vacant(entry) => {
-                entry.insert(incoming);
-            }
-            Entry::Occupied(mut entry) => {
-                conflict |= entry.get_mut().merge(incoming);
-            }
+        if let Some(existing) = current.get_mut(&parent) {
+            conflict |= existing.merge(incoming);
+        } else if current.len() < MAX_ROSTER_LOCKS {
+            current.insert(parent, incoming);
+        } else {
+            conflict = true;
         }
     }
     conflict

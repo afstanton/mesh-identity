@@ -191,8 +191,8 @@ pub fn group_roster_freshness_message(
     message
 }
 
-pub const DEFAULT_MAX_IDENTITIES: usize = 16;
-pub const MAX_IDENTITIES_CEILING: usize = 256;
+pub const DEFAULT_MAX_IDENTITIES: usize = 2048;
+pub const MAX_IDENTITIES_CEILING: usize = 4096;
 
 pub type Identity = [u8; 32];
 

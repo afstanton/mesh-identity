@@ -11,3 +11,6 @@ pub mod transport;
 pub mod ui_text;
 #[cfg(any(test, feature = "test-support"))]
 pub mod vectors;
+
+#[cfg(feature = "groups")]
+pub mod groups;

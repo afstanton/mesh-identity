@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:mesh_identity/mesh_identity.dart';
 
+import 'encounter_coordinator.dart';
+import 'encounter_session.dart';
 import 'keyring_service.dart';
 import 'snapshot_envelope.dart';
 import 'snapshot_storage.dart';
@@ -28,10 +30,13 @@ enum IdentityStatus {
 }
 
 /// App-level controller managing the single-isolate [MeshInstallation] lifecycle,
-/// persona seed storage, and serialized atomic snapshot writes.
+/// persona seed storage, serialized atomic snapshot writes, and delegated
+/// Encounter ceremony coordination.
 class IdentityController extends ChangeNotifier {
   final SecureKeyringService _keyring;
   final SnapshotStorageService _storage;
+  final DateTime Function() _clock;
+  late final EncounterCoordinator _encounter;
 
   MeshInstallation? _installation;
   IdentityStatus _status = IdentityStatus.uninitialized;
@@ -44,17 +49,55 @@ class IdentityController extends ChangeNotifier {
   Future<void> _queue = Future<void>.value();
   bool _isDisposed = false;
   bool _hasPendingChanges = false;
+  int _lastNowMs = 0;
 
   IdentityController({
     SecureKeyringService? keyring,
     SnapshotStorageService? storage,
+    DateTime Function()? clock,
   }) : _keyring = keyring ?? FlutterSecureKeyringService(),
-       _storage = storage ?? FileSnapshotStorageService();
+       _storage = storage ?? FileSnapshotStorageService(),
+       _clock = clock ?? DateTime.now {
+    _encounter = EncounterCoordinator(
+      runSerialized: _serialized,
+      now: _now,
+      getInstallation: () => _installation,
+      requireInstallation: _requireInstallation,
+      isReady: () => isReady,
+      isDisposed: () => _isDisposed,
+      persistSnapshot: (at) => _persistSnapshotInternal(at: at),
+      rollbackInstallation: _rollbackInstallation,
+      saveEncodedSnapshot: _storage.saveSnapshot,
+      markPendingChanges: () => _hasPendingChanges = true,
+      clearPendingChanges: () => _hasPendingChanges = false,
+      syncCachedView: _syncCachedView,
+      notify: _notifySafely,
+    );
+  }
 
   IdentityStatus get status => _status;
   bool get isReady => _status == IdentityStatus.ready && _installation != null;
   bool get isDisposed => _isDisposed;
   String? get errorMessage => _errorMessage;
+  EncounterSessionState get encounterSession => _encounter.session;
+  bool get hasActiveEncounter => _encounter.session.isActive;
+  DateTime? get rateLimitedUntil => _encounter.rateLimitedUntil;
+  DateTime get currentTime => _now();
+
+  DateTime _now() {
+    final raw = _clock().millisecondsSinceEpoch;
+    final clamped = raw < _lastNowMs ? _lastNowMs : raw;
+    _lastNowMs = clamped;
+    return DateTime.fromMillisecondsSinceEpoch(clamped);
+  }
+
+  void _disposeInstallationAndCeremony() {
+    // Dispose installation before ceremony so EncounterCeremony.dispose() never
+    // invokes native cancel with wall-clock time during teardown or rollback.
+    _installation?.dispose();
+    _installation = null;
+    _encounter.disposeCeremonyHandleOnly();
+  }
 
   /// Defensive copy of the 32-byte Ed25519 public key of the active local persona.
   Uint8List? get selectedIdentity => _cachedSelectedIdentity == null
@@ -96,6 +139,14 @@ class IdentityController extends ChangeNotifier {
       throw StateError('IdentityController is not ready (status: $_status)');
     }
     return inst;
+  }
+
+  void _ensureNoActiveEncounter() {
+    if (_encounter.hasActiveCeremony) {
+      throw const CeremonyActiveException(
+        'Cannot modify personas or contacts while an encounter ceremony is active.',
+      );
+    }
   }
 
   void _syncCachedView() {
@@ -147,8 +198,8 @@ class IdentityController extends ChangeNotifier {
   }
 
   Future<void> _initializeInternal() async {
-    _installation?.dispose();
-    _installation = null;
+    _disposeInstallationAndCeremony();
+    _encounter.resetState();
     _hasPendingChanges = false;
     _status = IdentityStatus.initializing;
     _errorMessage = null;
@@ -251,6 +302,8 @@ class IdentityController extends ChangeNotifier {
       _notifySafely();
     } catch (e) {
       if (_isDisposed) return;
+      _disposeInstallationAndCeremony();
+      _encounter.resetState();
       _status = IdentityStatus.unavailable;
       _errorMessage = 'Unable to access local identity storage: $e';
       _clearCachedView();
@@ -275,7 +328,7 @@ class IdentityController extends ChangeNotifier {
 
       final encoded = SnapshotEnvelope.encode(
         identityKeys: [primaryKey],
-        snapshotBytes: inst.save(),
+        snapshotBytes: inst.save(at: _now()),
       );
       await _storage.saveSnapshot(encoded);
       if (_isDisposed) {
@@ -349,11 +402,11 @@ class IdentityController extends ChangeNotifier {
   }
 
   /// Persist the latest framed snapshot atomically. Must be called inside [_serialized].
-  Future<void> _persistSnapshotInternal() async {
+  Future<void> _persistSnapshotInternal({DateTime? at}) async {
     final inst = _requireInstallation();
     final encoded = SnapshotEnvelope.encode(
       identityKeys: inst.identities,
-      snapshotBytes: inst.save(),
+      snapshotBytes: inst.save(at: at ?? _now()),
     );
     await _storage.saveSnapshot(encoded);
     _hasPendingChanges = false;
@@ -364,6 +417,7 @@ class IdentityController extends ChangeNotifier {
     List<Uint8List> prevKeys,
   ) async {
     if (_isDisposed) return;
+    final hadActiveEncounter = _encounter.hasActiveCeremony;
     try {
       final seeds = await _loadSeedsForKeys(prevKeys);
       MeshInstallation? restored;
@@ -382,14 +436,18 @@ class IdentityController extends ChangeNotifier {
         restored.dispose();
         return;
       }
-      _installation?.dispose();
+      _disposeInstallationAndCeremony();
       _installation = restored;
       _hasPendingChanges = false;
       _syncCachedView();
+      if (hadActiveEncounter) {
+        _encounter.onExternalRollback();
+        _notifySafely();
+      }
     } catch (e) {
       if (_isDisposed) return;
-      _installation?.dispose();
-      _installation = null;
+      _disposeInstallationAndCeremony();
+      _encounter.resetState();
       _hasPendingChanges = false;
       _status = IdentityStatus.corrupted;
       _errorMessage = 'State rollback failed after persistence error: $e';
@@ -402,8 +460,9 @@ class IdentityController extends ChangeNotifier {
     FutureOr<T> Function(MeshInstallation inst) mutate,
   ) async {
     final inst = _requireInstallation();
+    final now = _now();
     final prevKeys = inst.identities;
-    final prevSnapshotBytes = inst.save();
+    final prevSnapshotBytes = inst.save(at: now);
 
     final T result;
     try {
@@ -411,7 +470,7 @@ class IdentityController extends ChangeNotifier {
       if (_isDisposed) {
         throw StateError('IdentityController has been disposed');
       }
-      await _persistSnapshotInternal();
+      await _persistSnapshotInternal(at: _now());
     } catch (_) {
       await _rollbackInstallation(prevSnapshotBytes, prevKeys);
       rethrow;
@@ -426,11 +485,13 @@ class IdentityController extends ChangeNotifier {
 
   /// Add a new persona with a freshly generated 32-byte Ed25519 signing seed.
   ///
-  /// Uses a recoverable transaction: writes seed, persists framed snapshot, and
-  /// rolls back on failure without exposing uncommitted keys.
+  /// Rejects with [CeremonyActiveException] if an encounter ceremony is live.
+  /// Otherwise uses a recoverable transaction: writes seed, persists framed
+  /// snapshot, and rolls back on failure without exposing uncommitted keys.
   Future<Uint8List> addPersona() {
     return _serialized(() async {
       final inst = _requireInstallation();
+      _ensureNoActiveEncounter();
       final newSeed = MeshInstallation.generateSeed();
       Uint8List? newKey;
       var seedSaved = false;
@@ -439,7 +500,7 @@ class IdentityController extends ChangeNotifier {
         newKey = inst.addIdentity(newSeed);
         await _keyring.saveSeed(newKey, newSeed);
         seedSaved = true;
-        await _persistSnapshotInternal();
+        await _persistSnapshotInternal(at: _now());
         if (!_isDisposed) {
           _syncCachedView();
           _notifySafely();
@@ -470,27 +531,34 @@ class IdentityController extends ChangeNotifier {
   }
 
   /// Select active persona by [identityKey].
+  ///
+  /// Rejects with [CeremonyActiveException] without altering state if an
+  /// encounter ceremony is active.
   Future<void> selectPersona(Uint8List identityKey) {
     return _serialized(() async {
+      _requireInstallation();
+      _ensureNoActiveEncounter();
       await _transactionalMutate((inst) {
-        inst.selectIdentity(identityKey);
+        inst.selectIdentity(identityKey, at: _now());
       });
     });
   }
 
   /// Remove persona identified by [identityKey].
   ///
-  /// Persists the updated snapshot FIRST before deleting the seed from keyring so
-  /// a write failure or crash never leaves a snapshot referencing a missing seed.
+  /// Rejects with [CeremonyActiveException] if an encounter ceremony is active.
+  /// Otherwise persists the updated snapshot FIRST before deleting the seed from
+  /// keyring so a write failure or crash never leaves a missing seed reference.
   Future<void> removePersona(Uint8List identityKey) {
     return _serialized(() async {
       final inst = _requireInstallation();
+      _ensureNoActiveEncounter();
       final prevKeys = inst.identities;
-      final prevSnapshotBytes = inst.save();
+      final prevSnapshotBytes = inst.save(at: _now());
 
       try {
         inst.removeIdentity(identityKey);
-        await _persistSnapshotInternal();
+        await _persistSnapshotInternal(at: _now());
       } catch (_) {
         await _rollbackInstallation(prevSnapshotBytes, prevKeys);
         rethrow;
@@ -511,8 +579,12 @@ class IdentityController extends ChangeNotifier {
   }
 
   /// Block an unverified or verified peer public key.
+  ///
+  /// Rejects with [CeremonyActiveException] if an encounter ceremony is active.
   Future<void> blockContact(Uint8List peerPublicKey) {
     return _serialized(() async {
+      _requireInstallation();
+      _ensureNoActiveEncounter();
       await _transactionalMutate((inst) {
         inst.blockContact(peerPublicKey);
       });
@@ -521,13 +593,50 @@ class IdentityController extends ChangeNotifier {
 
   /// Execute a synchronous or asynchronous [MeshInstallation] mutation under
   /// the serialization lock with atomic snapshot persistence and rollback on failure.
+  ///
+  /// Rejects with [CeremonyActiveException] if an encounter ceremony is active.
   Future<T> runMutation<T>(
     FutureOr<T> Function(MeshInstallation installation) action,
   ) {
     return _serialized(() async {
+      _requireInstallation();
+      _ensureNoActiveEncounter();
       return _transactionalMutate(action);
     });
   }
+
+  /// Start a two-device Encounter ceremony as Initiator (generates QR 1 Offer).
+  Future<void> startEncounterAsInitiator() => _encounter.startAsInitiator();
+
+  /// Open a two-device Encounter ceremony as Responder (awaiting peer's QR 1 Offer).
+  Future<void> openEncounterAsResponder() => _encounter.openAsResponder();
+
+  /// Responder imports Initiator's QR 1 Offer URI and emits QR 2 Response URI.
+  Future<void> submitEncounterOffer(String rawUri) =>
+      _encounter.submitOffer(rawUri);
+
+  /// Initiator imports Responder's QR 2 Response URI, emits QR 3 Reveal URI,
+  /// and computes the 6-digit SAS comparison code.
+  Future<void> submitEncounterResponse(String rawUri) =>
+      _encounter.submitResponse(rawUri);
+
+  /// Responder imports Initiator's QR 3 Reveal URI and computes the 6-digit SAS code.
+  Future<void> submitEncounterReveal(String rawUri) =>
+      _encounter.submitReveal(rawUri);
+
+  /// Confirm the human-typed 6-digit SAS code and durably save the verified contact.
+  Future<void> confirmEncounterCode(String sixDigitInput) =>
+      _encounter.confirmCode(sixDigitInput);
+
+  /// Explicitly cancel any live Encounter ceremony on the active installation.
+  Future<void> cancelActiveEncounter() => _encounter.cancelActive();
+
+  /// Check ceremony timeout (120s) and rate-limit pause expiry (60s).
+  Future<void> checkEncounterExpiry() => _encounter.checkExpiry();
+
+  /// Dismiss the current encounter screen state, cancelling any live session
+  /// and returning to `idle` (or `rateLimited` if pause remains active).
+  Future<void> dismissEncounterSession() => _encounter.dismissSession();
 
   /// Permanently erase local signing keys, archive any corrupted snapshot file
   /// strictly for diagnostics, and initialize a brand-new identity.
@@ -554,8 +663,8 @@ class IdentityController extends ChangeNotifier {
         );
       }
 
-      _installation?.dispose();
-      _installation = null;
+      _disposeInstallationAndCeremony();
+      _encounter.resetState();
       _hasPendingChanges = false;
       _clearCachedView();
 
@@ -570,7 +679,7 @@ class IdentityController extends ChangeNotifier {
   Future<void> persist({bool force = false}) {
     return _serialized(() async {
       if (_isDisposed || !isReady || (!force && !_hasPendingChanges)) return;
-      await _persistSnapshotInternal();
+      await _persistSnapshotInternal(at: _now());
     });
   }
 
@@ -579,8 +688,8 @@ class IdentityController extends ChangeNotifier {
     if (_isDisposed) return;
     _isDisposed = true;
     _hasPendingChanges = false;
-    _installation?.dispose();
-    _installation = null;
+    _disposeInstallationAndCeremony();
+    _encounter.resetState();
     _clearCachedView();
     super.dispose();
   }

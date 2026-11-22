@@ -4,7 +4,7 @@ A cross-platform reference and demonstration application for **[`mesh_identity`]
 
 Target Platforms: **iOS**, **Android**, **macOS**, **Windows**, and **Linux** (Web excluded).
 
-> **Current Status**: Responsive Shell & Core Node phases complete (Slices 1–2). Native integration with `mesh_identity` v0.5.0, transactional keyring + generational snapshot persistence, responsive adaptive shell, macOS HIG menu/toolbar, and About screen are complete. Practice Mode & Encounter ceremonies are next (Slice 3).
+> **Current Status**: Core Node, Responsive Shell, and In-Person Encounter ceremonies complete (Slices 1–3). Native integration with `mesh_identity` v0.5.0, transactional keyring + generational snapshot persistence, responsive adaptive shell, macOS HIG menu/toolbar, About screen, isolated single-device Practice Mode, and two-device QR/URI encounter verification are complete. Contact Governance & Persona Management are next (Slice 4).
 
 ---
 
@@ -17,10 +17,12 @@ Target Platforms: **iOS**, **Android**, **macOS**, **Windows**, and **Linux** (W
 | **Secure Persistence** | **Complete** | Keychain/Keystore seed storage, envelope framing & generational atomic snapshots. |
 | **Responsive Shell & HIG** | **Complete** | Adaptive bottom bar / navigation rail, themes, and macOS unified toolbar + menu bar. |
 | **About Screen** | **Complete** | In-app MIT license, engine versions, and public repository link (`https://github.com/afstanton/mesh-identity`). |
-| **Practice Mode Encounter** | **Next** | Single-device Alice & Bob ceremony with 6-digit SAS verification. |
-| **Optical QR Transport** | **Planned** | Dynamic QR code generation, camera scanning, and clipboard/file import. |
-| **BLE Transport** | **Planned** | Offline Bluetooth Low Energy advertisement & GATT exchange. |
-| **OpenPGP & Groups** | **Planned** | Cross-certification preview disclosures & Byzantine group admission. |
+| **Practice Mode Encounter** | **Complete** | Isolated single-device Alice & Bob ceremony with 6-digit SAS verification. |
+| **Manual & QR Encounter** | **Complete** | Two-device optical QR display (`QrTransport.encodeUri`), clipboard URI import, statutory notices, timeout & rate-limit handling. |
+| **Contacts & Personas UI** | **Next** | Verified contact detail cards, alias editing, blocking, and multi-persona switching (Slice 4). |
+| **Camera QR Scanner** | **Planned** | Hardware camera barcode scanning with entitlements & fallback (Slice 5). |
+| **Device Handoff & Groups** | **Planned** | Voting role handoff, Byzantine group admission, and two-phase commit outbox (Slices 6–7). |
+| **OpenPGP & BLE** | **Planned** | OpenPGP export previews/cross-certification and offline BLE transport (Slices 8–9). |
 
 ---
 

@@ -1,21 +1,74 @@
+import 'dart:async';
+
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../core/theme.dart';
+import '../../services/encounter_session.dart';
 import '../../services/identity_controller.dart';
+import '../encounter/practice_encounter_screen.dart';
+import '../encounter/two_device_encounter_screen.dart';
+import '../encounter/widgets/statutory_notices.dart';
 
-/// Primary Encounter hub displaying active persona details and node summary.
-class EncounterHomeView extends StatelessWidget {
+/// Primary Encounter hub displaying active persona details, node summary,
+/// and launch actions for two-device encounters and single-device Practice Mode.
+class EncounterHomeView extends StatefulWidget {
   final IdentityController controller;
 
   const EncounterHomeView({super.key, required this.controller});
 
-  static String _toHex(Uint8List bytes) {
-    final sb = StringBuffer();
-    for (final b in bytes) {
-      sb.write(b.toRadixString(16).padLeft(2, '0'));
+  @override
+  State<EncounterHomeView> createState() => _EncounterHomeViewState();
+}
+
+class _EncounterHomeViewState extends State<EncounterHomeView> {
+  Timer? _rateLimitTicker;
+
+  @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_onControllerChanged);
+    _syncRateLimitTicker();
+  }
+
+  @override
+  void didUpdateWidget(covariant EncounterHomeView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.controller != oldWidget.controller) {
+      oldWidget.controller.removeListener(_onControllerChanged);
+      widget.controller.addListener(_onControllerChanged);
+      _syncRateLimitTicker();
     }
-    return sb.toString();
+  }
+
+  void _onControllerChanged() {
+    if (!mounted) return;
+    _syncRateLimitTicker();
+    setState(() {});
+  }
+
+  void _syncRateLimitTicker() {
+    final until = widget.controller.rateLimitedUntil;
+    final paused =
+        until != null && widget.controller.currentTime.isBefore(until);
+    if (paused && _rateLimitTicker == null) {
+      _rateLimitTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (!mounted || widget.controller.isDisposed) return;
+        unawaited(widget.controller.checkEncounterExpiry());
+        _syncRateLimitTicker();
+        setState(() {});
+      });
+    } else if (!paused && _rateLimitTicker != null) {
+      _rateLimitTicker?.cancel();
+      _rateLimitTicker = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    _rateLimitTicker?.cancel();
+    widget.controller.removeListener(_onControllerChanged);
+    super.dispose();
   }
 
   Future<void> _copyPublicKey(BuildContext context, String hexKey) async {
@@ -26,13 +79,39 @@ class EncounterHomeView extends StatelessWidget {
     );
   }
 
+  void _openTwoDeviceEncounter(EncounterRole role) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => TwoDeviceEncounterScreen(
+          controller: widget.controller,
+          initialRole: role,
+        ),
+      ),
+    );
+  }
+
+  void _openPracticeMode() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const PracticeEncounterScreen()),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final selectedKey = controller.selectedIdentity;
-    final fullHex = selectedKey == null ? 'Unavailable' : _toHex(selectedKey);
+    final selectedKey = widget.controller.selectedIdentity;
+    final fullHex = selectedKey == null
+        ? 'Unavailable'
+        : formatHexKey(selectedKey);
     final shortHex = selectedKey == null
         ? 'Unavailable'
-        : '${fullHex.substring(0, 12)}...${fullHex.substring(fullHex.length - 8)}';
+        : shortHexKey(selectedKey);
+
+    final rateLimitedUntil = widget.controller.rateLimitedUntil;
+    final now = widget.controller.currentTime;
+    final isPaused = rateLimitedUntil != null && now.isBefore(rateLimitedUntil);
+    final pauseRemaining = isPaused
+        ? rateLimitedUntil.difference(now)
+        : Duration.zero;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(20),
@@ -108,13 +187,13 @@ class EncounterHomeView extends StatelessWidget {
                           Chip(
                             avatar: const Icon(Icons.badge_outlined, size: 18),
                             label: Text(
-                              'Personas: ${controller.identities.length}',
+                              'Personas: ${widget.controller.identities.length}',
                             ),
                           ),
                           Chip(
                             avatar: const Icon(Icons.people_outline, size: 18),
                             label: Text(
-                              'Contacts: ${controller.contactsCount}',
+                              'Contacts: ${widget.controller.contactsCount}',
                             ),
                           ),
                         ],
@@ -139,7 +218,7 @@ class EncounterHomeView extends StatelessWidget {
                           const SizedBox(width: 10),
                           Expanded(
                             child: Text(
-                              'In-Person Ceremonies',
+                              'In-Person Encounter',
                               style: Theme.of(context).textTheme.titleMedium,
                             ),
                           ),
@@ -147,12 +226,53 @@ class EncounterHomeView extends StatelessWidget {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Single-device Practice Mode and QR payload exchange '
-                        'with 6-digit Short Authentication String (SAS) '
-                        'verification will arrive in Slice 3.',
+                        'Exchange cryptographic Offer, Response, and Reveal payloads '
+                        'between two devices via QR display and clipboard URI import, '
+                        'then confirm the 6-digit SAS code together. Hardware camera '
+                        'scanning arrives in Slice 5.',
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),
+                      ),
+                      if (isPaused) ...[
+                        const SizedBox(height: 14),
+                        RateLimitBanner(remaining: pauseRemaining),
+                      ],
+                      const SizedBox(height: 16),
+                      Wrap(
+                        spacing: 12,
+                        runSpacing: 12,
+                        children: [
+                          FilledButton.icon(
+                            key: const Key('start_encounter_button'),
+                            onPressed: isPaused
+                                ? null
+                                : () => _openTwoDeviceEncounter(
+                                    EncounterRole.initiator,
+                                  ),
+                            icon: const Icon(Icons.qr_code_2, size: 18),
+                            label: const Text('Start Encounter'),
+                          ),
+                          FilledButton.tonalIcon(
+                            key: const Key('join_encounter_button'),
+                            onPressed: isPaused
+                                ? null
+                                : () => _openTwoDeviceEncounter(
+                                    EncounterRole.responder,
+                                  ),
+                            icon: const Icon(
+                              Icons.playlist_add_check_outlined,
+                              size: 18,
+                            ),
+                            label: const Text('Join Encounter'),
+                          ),
+                          OutlinedButton.icon(
+                            key: const Key('practice_mode_button'),
+                            onPressed: _openPracticeMode,
+                            icon: const Icon(Icons.science_outlined, size: 18),
+                            label: const Text('Practice Mode'),
+                          ),
+                        ],
                       ),
                     ],
                   ),

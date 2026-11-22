@@ -73,6 +73,8 @@ class _EncounterAppState extends State<EncounterApp> {
       onPause: _handlePersistLifecycle,
       onHide: _handlePersistLifecycle,
       onDetach: _handlePersistLifecycle,
+      onResume: _handleResumeLifecycle,
+      onShow: _handleResumeLifecycle,
     );
     if (_controller.status == IdentityStatus.uninitialized) {
       unawaited(_controller.initialize());
@@ -107,6 +109,12 @@ class _EncounterAppState extends State<EncounterApp> {
   void _handlePersistLifecycle() {
     if (_controller.isReady) {
       unawaited(_controller.persist());
+    }
+  }
+
+  void _handleResumeLifecycle() {
+    if (_controller.isReady) {
+      unawaited(_controller.checkEncounterExpiry());
     }
   }
 
@@ -189,7 +197,7 @@ class _EncounterAppState extends State<EncounterApp> {
               };
 
               return MacOsMenuBar(
-                navigationEnabled: ready,
+                navigationEnabled: ready && !_controller.hasActiveEncounter,
                 onSelectDestination: (destination) {
                   setState(() {
                     _selectedDestination = destination;

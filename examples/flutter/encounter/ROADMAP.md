@@ -28,7 +28,7 @@ This roadmap breaks down the development of **Encounter** (`code/mesh-identity/e
   - Store-compliant **About & Open Source Screen** linking to `https://github.com/afstanton/mesh-identity` with MIT license display.
   - Adaptive dark/light themes.
 
-- [ ] **Slice 3: In-Person Encounter Ceremony (Practice Mode & Manual/QR Transport)**
+- [x] **Slice 3: In-Person Encounter Ceremony (Practice Mode & Manual/QR Transport)**
   - Single-device "Practice Mode" (Alice & Bob dual ceremony) runnable without camera or secondary device.
   - Optical QR display via `QrTransport.encodeUri` and clipboard/text payload import.
   - Statutory UI: `proximityDisclaimer`, `notIdentityProof`, and `instruction`.

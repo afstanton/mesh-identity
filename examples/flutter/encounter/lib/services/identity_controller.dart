@@ -18,7 +18,12 @@ enum IdentityStatus {
   /// Identity engine is initialized, restored, and ready for operations.
   ready,
 
-  /// Storage or snapshot is corrupted or mismatched; requires explicit user recovery.
+  /// Storage or keyring was temporarily unavailable (e.g. locked keychain or stopped
+  /// secret service). User should retry without erasing identity state.
+  unavailable,
+
+  /// Stored snapshot or snapshot/keyring pairing is corrupted or mismatched;
+  /// requires explicit destructive reset to recover.
   corrupted,
 }
 
@@ -38,6 +43,7 @@ class IdentityController extends ChangeNotifier {
 
   Future<void> _queue = Future<void>.value();
   bool _isDisposed = false;
+  bool _hasPendingChanges = false;
 
   IdentityController({
     SecureKeyringService? keyring,
@@ -143,6 +149,7 @@ class IdentityController extends ChangeNotifier {
   Future<void> _initializeInternal() async {
     _installation?.dispose();
     _installation = null;
+    _hasPendingChanges = false;
     _status = IdentityStatus.initializing;
     _errorMessage = null;
     _clearCachedView();
@@ -194,87 +201,58 @@ class IdentityController extends ChangeNotifier {
         return;
       }
 
-      if (SnapshotEnvelope.hasEnvelopeMagic(bytes)) {
-        final SnapshotEnvelope envelope;
-        try {
-          envelope = SnapshotEnvelope.decode(bytes);
-        } on FormatException catch (e) {
-          _status = IdentityStatus.corrupted;
-          _errorMessage = 'Snapshot restoration failed: ${e.message}';
-          _clearCachedView();
-          _notifySafely();
-          return;
-        }
-
-        final seeds = await _loadSeedsForKeys(envelope.identityKeys);
-        MeshInstallation? restored;
+      final SnapshotEnvelope envelope;
+      final List<Uint8List> seeds;
+      MeshInstallation? restored;
+      try {
+        envelope = SnapshotEnvelope.decode(bytes);
+        seeds = await _loadSeedsForKeys(envelope.identityKeys);
         try {
           if (_isDisposed) return;
           restored = MeshInstallation.restore(
             snapshotBytes: envelope.snapshotBytes,
             signingKeySeeds: seeds,
           );
-        } on Exception catch (e) {
-          _status = IdentityStatus.corrupted;
-          _errorMessage = 'Snapshot restoration failed: $e';
-          _clearCachedView();
-          _notifySafely();
-          return;
         } finally {
           for (final seed in seeds) {
             seed.fillRange(0, seed.length, 0);
           }
         }
-
-        if (_isDisposed) {
-          restored.dispose();
-          return;
-        }
-        _installation = restored;
-        _status = IdentityStatus.ready;
-        _syncCachedView();
-
-        // Best-effort prune orphan keyring keys left behind by a crashed transaction.
-        await _pruneOrphanKeys(
-          keyringKeys: keyringKeys,
-          committedKeys: envelope.identityKeys,
-        );
+      } on FormatException catch (e) {
+        if (_isDisposed) return;
+        _status = IdentityStatus.corrupted;
+        _errorMessage = 'Snapshot restoration failed: ${e.message}';
+        _clearCachedView();
         _notifySafely();
-      } else {
-        // Legacy raw CBOR snapshot without envelope framing.
-        final allSeeds = await _keyring.getAllSeeds();
-        MeshInstallation? restored;
-        try {
-          if (_isDisposed) return;
-          restored = MeshInstallation.restore(
-            snapshotBytes: bytes,
-            signingKeySeeds: allSeeds,
-          );
-        } on Exception catch (e) {
-          _status = IdentityStatus.corrupted;
-          _errorMessage = 'Snapshot restoration failed: $e';
-          _clearCachedView();
-          _notifySafely();
-          return;
-        } finally {
-          for (final seed in allSeeds) {
-            seed.fillRange(0, seed.length, 0);
-          }
-        }
-
-        if (_isDisposed) {
-          restored.dispose();
-          return;
-        }
-        _installation = restored;
-        _status = IdentityStatus.ready;
-        _syncCachedView();
+        return;
+      } on MeshIdentityException catch (e) {
+        if (_isDisposed) return;
+        _status = IdentityStatus.corrupted;
+        _errorMessage = 'Snapshot restoration failed: $e';
+        _clearCachedView();
         _notifySafely();
+        return;
       }
+
+      if (_isDisposed) {
+        restored.dispose();
+        return;
+      }
+      _installation = restored;
+      _status = IdentityStatus.ready;
+      _hasPendingChanges = false;
+      _syncCachedView();
+
+      // Best-effort prune orphan keyring keys left behind by a crashed transaction.
+      await _pruneOrphanKeys(
+        keyringKeys: keyringKeys,
+        committedKeys: envelope.identityKeys,
+      );
+      _notifySafely();
     } catch (e) {
       if (_isDisposed) return;
-      _status = IdentityStatus.corrupted;
-      _errorMessage = 'Snapshot restoration failed: $e';
+      _status = IdentityStatus.unavailable;
+      _errorMessage = 'Unable to access local identity storage: $e';
       _clearCachedView();
       _notifySafely();
     }
@@ -308,6 +286,7 @@ class IdentityController extends ChangeNotifier {
       _installation = inst;
       inst = null;
       _status = IdentityStatus.ready;
+      _hasPendingChanges = false;
       _syncCachedView();
       _notifySafely();
     } catch (e) {
@@ -320,8 +299,8 @@ class IdentityController extends ChangeNotifier {
         }
       }
       if (_isDisposed) return;
-      _status = IdentityStatus.corrupted;
-      _errorMessage = 'Failed to initialize identity: $e';
+      _status = IdentityStatus.unavailable;
+      _errorMessage = 'Unable to initialize local identity storage: $e';
       _clearCachedView();
       _notifySafely();
     } finally {
@@ -377,6 +356,7 @@ class IdentityController extends ChangeNotifier {
       snapshotBytes: inst.save(),
     );
     await _storage.saveSnapshot(encoded);
+    _hasPendingChanges = false;
   }
 
   Future<void> _rollbackInstallation(
@@ -404,11 +384,13 @@ class IdentityController extends ChangeNotifier {
       }
       _installation?.dispose();
       _installation = restored;
+      _hasPendingChanges = false;
       _syncCachedView();
     } catch (e) {
       if (_isDisposed) return;
       _installation?.dispose();
       _installation = null;
+      _hasPendingChanges = false;
       _status = IdentityStatus.corrupted;
       _errorMessage = 'State rollback failed after persistence error: $e';
       _clearCachedView();
@@ -417,7 +399,7 @@ class IdentityController extends ChangeNotifier {
   }
 
   Future<T> _transactionalMutate<T>(
-    T Function(MeshInstallation inst) mutate,
+    FutureOr<T> Function(MeshInstallation inst) mutate,
   ) async {
     final inst = _requireInstallation();
     final prevKeys = inst.identities;
@@ -425,7 +407,10 @@ class IdentityController extends ChangeNotifier {
 
     final T result;
     try {
-      result = mutate(inst);
+      result = await mutate(inst);
+      if (_isDisposed) {
+        throw StateError('IdentityController has been disposed');
+      }
       await _persistSnapshotInternal();
     } catch (_) {
       await _rollbackInstallation(prevSnapshotBytes, prevKeys);
@@ -534,22 +519,32 @@ class IdentityController extends ChangeNotifier {
     });
   }
 
-  /// Execute an arbitrary [MeshInstallation] mutation under the serialization lock
-  /// with atomic snapshot persistence and rollback on failure.
-  Future<T> runMutation<T>(T Function(MeshInstallation installation) action) {
+  /// Execute a synchronous or asynchronous [MeshInstallation] mutation under
+  /// the serialization lock with atomic snapshot persistence and rollback on failure.
+  Future<T> runMutation<T>(
+    FutureOr<T> Function(MeshInstallation installation) action,
+  ) {
     return _serialized(() async {
       return _transactionalMutate(action);
     });
   }
 
-  /// Non-destructively archive any corrupted snapshot and reset identity state.
+  /// Permanently erase local signing keys, archive any corrupted snapshot file
+  /// strictly for diagnostics, and initialize a brand-new identity.
   ///
-  /// Requires explicit [confirmDestructiveReset] `true` confirmation. Returns the
-  /// archived backup path/identifier if a snapshot was quarantined.
+  /// Once the keyring is cleared, the archived snapshot cannot be restored and
+  /// the previous identity, personas, and contacts are permanently lost. Requires
+  /// [status] == [IdentityStatus.corrupted] and explicit [confirmDestructiveReset] `true`.
   Future<String?> resetCorruptedState({required bool confirmDestructiveReset}) {
     return _serialized(() async {
       if (_isDisposed) {
         throw StateError('IdentityController has been disposed');
+      }
+      if (_status != IdentityStatus.corrupted) {
+        throw StateError(
+          'resetCorruptedState can only be called when status is '
+          'IdentityStatus.corrupted (current: $_status)',
+        );
       }
       if (!confirmDestructiveReset) {
         throw ArgumentError.value(
@@ -561,6 +556,7 @@ class IdentityController extends ChangeNotifier {
 
       _installation?.dispose();
       _installation = null;
+      _hasPendingChanges = false;
       _clearCachedView();
 
       final archivedPath = await _storage.archiveSnapshot();
@@ -570,10 +566,10 @@ class IdentityController extends ChangeNotifier {
     });
   }
 
-  /// Manually trigger snapshot persistence (e.g. when app goes to background).
-  Future<void> persist() {
+  /// Trigger snapshot persistence if uncommitted changes exist (or when [force] is `true`).
+  Future<void> persist({bool force = false}) {
     return _serialized(() async {
-      if (_isDisposed || !isReady) return;
+      if (_isDisposed || !isReady || (!force && !_hasPendingChanges)) return;
       await _persistSnapshotInternal();
     });
   }
@@ -582,6 +578,7 @@ class IdentityController extends ChangeNotifier {
   void dispose() {
     if (_isDisposed) return;
     _isDisposed = true;
+    _hasPendingChanges = false;
     _installation?.dispose();
     _installation = null;
     _clearCachedView();

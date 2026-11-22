@@ -34,7 +34,6 @@ typedef SnapshotRenameFn = Future<void> Function(
 
 class _DirectoryScan {
   final Map<int, File> generations = {};
-  File? legacyFile;
   final List<File> tempFiles = [];
 
   int get maxGeneration {
@@ -50,7 +49,7 @@ class _DirectoryScan {
     if (generations.isNotEmpty) {
       return generations[maxGeneration];
     }
-    return legacyFile;
+    return null;
   }
 }
 
@@ -61,9 +60,6 @@ class FileSnapshotStorageService implements SnapshotStorageService {
   final Future<Directory> Function() _getDirectory;
   final SnapshotRenameFn _rename;
 
-  static const String _legacyFileName = 'encounter_installation.snapshot';
-  static const String _legacyTempFileName =
-      'encounter_installation.snapshot.tmp';
   static const String _generationPrefix = 'encounter_installation.snapshot.';
   static const String _corruptPrefix = 'encounter_installation.corrupt-';
   static final RegExp _generationRegex = RegExp(
@@ -109,13 +105,8 @@ class FileSnapshotStorageService implements SnapshotStorageService {
       if (name.startsWith(_corruptPrefix)) {
         continue;
       }
-      if (name == _legacyTempFileName ||
-          (name.startsWith(_generationPrefix) && name.endsWith('.tmp'))) {
+      if (name.startsWith(_generationPrefix) && name.endsWith('.tmp')) {
         scan.tempFiles.add(entity);
-        continue;
-      }
-      if (name == _legacyFileName) {
-        scan.legacyFile = entity;
         continue;
       }
       final match = _generationRegex.firstMatch(name);
@@ -178,14 +169,11 @@ class FileSnapshotStorageService implements SnapshotStorageService {
         rethrow;
       }
 
-      // Best-effort cleanup of superseded generations, legacy file, and stale temps.
+      // Best-effort cleanup of superseded generations and stale temps.
       for (final entry in scan.generations.entries) {
         if (entry.key < nextGen) {
           await _bestEffortDelete(entry.value);
         }
-      }
-      if (scan.legacyFile != null) {
-        await _bestEffortDelete(scan.legacyFile!);
       }
       for (final staleTemp in scan.tempFiles) {
         await _bestEffortDelete(staleTemp);
@@ -229,9 +217,6 @@ class FileSnapshotStorageService implements SnapshotStorageService {
           await _bestEffortDelete(entry.value);
         }
       }
-      if (scan.legacyFile != null && scan.legacyFile!.path != latest.path) {
-        await _bestEffortDelete(scan.legacyFile!);
-      }
       for (final staleTemp in scan.tempFiles) {
         await _bestEffortDelete(staleTemp);
       }
@@ -247,9 +232,6 @@ class FileSnapshotStorageService implements SnapshotStorageService {
       final scan = await _scan(dir);
       for (final file in scan.generations.values) {
         await _bestEffortDelete(file);
-      }
-      if (scan.legacyFile != null) {
-        await _bestEffortDelete(scan.legacyFile!);
       }
       for (final temp in scan.tempFiles) {
         await _bestEffortDelete(temp);

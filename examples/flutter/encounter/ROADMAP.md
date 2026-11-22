@@ -22,8 +22,8 @@ This roadmap breaks down the development of **Encounter** (`code/mesh-identity/e
   - Cold-start restore, seed generation, persona switching, and corruption recovery states.
   - In-memory service fakes for unit and widget testing.
 
-- [ ] **Slice 2: Responsive Shell, Navigation & HIG Compliance**
-  - macOS unified top toolbar integration (`toolbarStyle = .unified`).
+- [x] **Slice 2: Responsive Shell, Navigation & HIG Compliance**
+  - macOS unified top toolbar integration (`toolbarStyle = .unified`) and native `PlatformMenuBar`.
   - Adaptive desktop navigation rail / titlebar vs mobile bottom navigation bar.
   - Store-compliant **About & Open Source Screen** linking to `https://github.com/afstanton/mesh-identity` with MIT license display.
   - Adaptive dark/light themes.

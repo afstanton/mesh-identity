@@ -1,6 +1,11 @@
 import 'dart:typed_data';
 
-/// Framed envelope binding committed persona public keys to a snapshot payload.
+/// Plain, unauthenticated framing envelope binding committed persona public keys
+/// to a local snapshot payload.
+///
+/// The header carries no MAC or cryptographic hash; integrity of local snapshot
+/// storage relies on platform file protections and `MeshInstallation.restore`
+/// domain validation.
 ///
 /// Format:
 /// - Bytes `0..4`: ASCII magic `"ENCS"` (`[0x45, 0x4E, 0x43, 0x53]`), disjoint
@@ -54,7 +59,7 @@ class SnapshotEnvelope {
     return sb.toString();
   }
 
-  /// Encodes [identityKeys] and [snapshotBytes] into an authenticated length-prefixed envelope.
+  /// Encodes [identityKeys] and [snapshotBytes] into a versioned framing envelope.
   static Uint8List encode({
     required List<Uint8List> identityKeys,
     required Uint8List snapshotBytes,

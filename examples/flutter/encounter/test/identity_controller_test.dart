@@ -10,6 +10,8 @@ class FaultyKeyringService implements SecureKeyringService {
   final InMemoryKeyringService inner;
   bool failOnSave = false;
   bool failOnRemove = false;
+  bool failOnGetAllKeys = false;
+  bool failOnGetSeed = false;
   Duration? delayOnSave;
 
   FaultyKeyringService(this.inner);
@@ -26,11 +28,20 @@ class FaultyKeyringService implements SecureKeyringService {
   }
 
   @override
-  Future<Uint8List?> getSeed(Uint8List identityKey) =>
-      inner.getSeed(identityKey);
+  Future<Uint8List?> getSeed(Uint8List identityKey) async {
+    if (failOnGetSeed) {
+      throw StateError('Simulated keyring getSeed failure');
+    }
+    return inner.getSeed(identityKey);
+  }
 
   @override
-  Future<List<Uint8List>> getAllIdentityKeys() => inner.getAllIdentityKeys();
+  Future<List<Uint8List>> getAllIdentityKeys() async {
+    if (failOnGetAllKeys) {
+      throw StateError('Simulated keyring access failure');
+    }
+    return inner.getAllIdentityKeys();
+  }
 
   @override
   Future<List<Uint8List>> getAllSeeds() => inner.getAllSeeds();
@@ -50,12 +61,20 @@ class FaultyKeyringService implements SecureKeyringService {
 class FaultySnapshotStorageService implements SnapshotStorageService {
   final InMemorySnapshotStorageService inner;
   bool failNextSave = false;
+  bool failOnHasSnapshot = false;
+  bool failOnLoad = false;
+  int saveCount = 0;
   Duration Function()? nextSaveDelay;
 
   FaultySnapshotStorageService(this.inner);
 
   @override
-  Future<Uint8List?> loadSnapshot() => inner.loadSnapshot();
+  Future<Uint8List?> loadSnapshot() async {
+    if (failOnLoad) {
+      throw StateError('Simulated storage load failure');
+    }
+    return inner.loadSnapshot();
+  }
 
   @override
   Future<void> saveSnapshot(Uint8List snapshotBytes) async {
@@ -67,11 +86,17 @@ class FaultySnapshotStorageService implements SnapshotStorageService {
       failNextSave = false;
       throw StateError('Simulated disk write failure');
     }
+    saveCount++;
     await inner.saveSnapshot(snapshotBytes);
   }
 
   @override
-  Future<bool> hasSnapshot() => inner.hasSnapshot();
+  Future<bool> hasSnapshot() async {
+    if (failOnHasSnapshot) {
+      throw StateError('Simulated storage availability failure');
+    }
+    return inner.hasSnapshot();
+  }
 
   @override
   Future<String?> archiveSnapshot() => inner.archiveSnapshot();
@@ -382,24 +407,153 @@ void main() {
       expect(controller.selectedIdentity, isNotNull);
     });
 
+    test('raw unframed MeshInstallation snapshot without envelope is rejected as corrupted', () async {
+      final seed = MeshInstallation.generateSeed();
+      final legacyInst = MeshInstallation(seed: seed);
+      final legacyKey = legacyInst.selectedIdentity;
+      final rawBytes = legacyInst.save();
+      legacyInst.dispose();
+
+      await rawKeyring.saveSeed(legacyKey, seed);
+      seed.fillRange(0, 32, 0);
+      await rawStorage.saveSnapshot(rawBytes);
+
+      await controller.initialize();
+
+      expect(controller.status, equals(IdentityStatus.corrupted));
+      expect(controller.isReady, isFalse);
+      expect(controller.errorMessage, contains('Invalid envelope magic bytes'));
+    });
+
+    test('async runMutation awaits callback before persisting and updating cached state', () async {
+      await controller.initialize();
+      final peerSeed = MeshInstallation.generateSeed();
+      final peerInst = MeshInstallation(seed: peerSeed);
+      final peerKey = peerInst.selectedIdentity;
+      peerInst.dispose();
+      peerSeed.fillRange(0, 32, 0);
+
+      final contact = await controller.runMutation((inst) async {
+        await Future<void>.delayed(const Duration(milliseconds: 15));
+        inst.importPeerKey(peerKey);
+        return inst.getContact(peerKey);
+      });
+
+      expect(contact, isNotNull);
+      expect(contact!.peerPublicKey, equals(peerKey));
+      expect(controller.contactsCount, equals(1));
+      expect(controller.getContact(peerKey), isNotNull);
+
+      controller.dispose();
+      final restarted = IdentityController(
+        keyring: rawKeyring,
+        storage: rawStorage,
+      );
+      addTearDown(restarted.dispose);
+      await restarted.initialize();
+
+      expect(restarted.contactsCount, equals(1));
+      expect(restarted.getContact(peerKey), isNotNull);
+    });
+
+    test('async runMutation failure rolls back in-memory state and preserves snapshot', () async {
+      await controller.initialize();
+      final peerSeed = MeshInstallation.generateSeed();
+      final peerInst = MeshInstallation(seed: peerSeed);
+      final peerKey = peerInst.selectedIdentity;
+      peerInst.dispose();
+      peerSeed.fillRange(0, 32, 0);
+
+      await expectLater(
+        () => controller.runMutation((inst) async {
+          inst.importPeerKey(peerKey);
+          await Future<void>.delayed(const Duration(milliseconds: 15));
+          throw StateError('Async mutation aborted');
+        }),
+        throwsStateError,
+      );
+
+      expect(controller.contactsCount, equals(0));
+      expect(controller.getContact(peerKey), isNull);
+
+      controller.dispose();
+      final restarted = IdentityController(
+        keyring: rawKeyring,
+        storage: rawStorage,
+      );
+      addTearDown(restarted.dispose);
+      await restarted.initialize();
+
+      expect(restarted.contactsCount, equals(0));
+      expect(restarted.getContact(peerKey), isNull);
+    });
+
+    test('transient storage and keyring errors enter unavailable state without allowing reset', () async {
+      // 1. Failure during storage check on startup -> unavailable
+      storage.failOnHasSnapshot = true;
+      await controller.initialize();
+
+      expect(controller.status, equals(IdentityStatus.unavailable));
+      expect(controller.isReady, isFalse);
+      await expectLater(
+        () => controller.resetCorruptedState(confirmDestructiveReset: true),
+        throwsStateError,
+      );
+
+      // Retry after storage returns, then simulate locked keyring on startup -> unavailable
+      storage.failOnHasSnapshot = false;
+      keyring.failOnGetAllKeys = true;
+      await controller.initialize();
+      expect(controller.status, equals(IdentityStatus.unavailable));
+
+      // Retry succeeds cleanly
+      keyring.failOnGetAllKeys = false;
+      await controller.initialize();
+      expect(controller.status, equals(IdentityStatus.ready));
+      final savedKey = controller.selectedIdentity!;
+
+      controller.dispose();
+
+      // 2. Failure reading keyring seed for existing snapshot -> unavailable (preserves snapshot)
+      keyring.failOnGetSeed = true;
+      final retryController = IdentityController(
+        keyring: keyring,
+        storage: storage,
+      );
+      addTearDown(retryController.dispose);
+      await retryController.initialize();
+
+      expect(retryController.status, equals(IdentityStatus.unavailable));
+      await expectLater(
+        () =>
+            retryController.resetCorruptedState(confirmDestructiveReset: true),
+        throwsStateError,
+      );
+
+      // Clear fault and retry -> restores existing identity intact
+      keyring.failOnGetSeed = false;
+      await retryController.initialize();
+      expect(retryController.status, equals(IdentityStatus.ready));
+      expect(retryController.selectedIdentity, equals(savedKey));
+    });
+
     test(
-      'legacy raw MeshInstallation snapshot without envelope restores cleanly',
+      'persist skips redundant writes when clean unless force is true',
       () async {
-        final seed = MeshInstallation.generateSeed();
-        final legacyInst = MeshInstallation(seed: seed);
-        final legacyKey = legacyInst.selectedIdentity;
-        final rawBytes = legacyInst.save();
-        legacyInst.dispose();
-
-        await rawKeyring.saveSeed(legacyKey, seed);
-        seed.fillRange(0, 32, 0);
-        await rawStorage.saveSnapshot(rawBytes);
-
         await controller.initialize();
+        final savesAfterInit = storage.saveCount;
 
-        expect(controller.status, equals(IdentityStatus.ready));
-        expect(controller.selectedIdentity, equals(legacyKey));
-        expect(controller.identities, equals([legacyKey]));
+        await controller.persist();
+        expect(storage.saveCount, equals(savesAfterInit));
+
+        await controller.addPersona();
+        expect(storage.saveCount, equals(savesAfterInit + 1));
+
+        await controller.persist();
+        expect(storage.saveCount, equals(savesAfterInit + 1));
+
+        await controller.persist(force: true);
+        expect(storage.saveCount, equals(savesAfterInit + 2));
       },
     );
   });

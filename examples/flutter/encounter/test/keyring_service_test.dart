@@ -79,39 +79,39 @@ void main() {
       },
     );
 
-    test(
-      'ignores unrelated, malformed, and legacy index keys cleanly',
-      () async {
-        final validKey = makeBytes(42);
-        final validSeed = makeBytes(84);
-        final mockValues = <String, String>{
-          'unrelated_setting': 'some_value',
-          'persona_index': 'legacy_comma_list',
-          'persona_seed_short': toHex(validSeed),
-          'persona_seed_${'zz' * 32}': toHex(validSeed),
-          'persona_seed_${toHex(makeBytes(9))}': 'not_valid_hex',
-          'persona_seed_${toHex(validKey)}': toHex(validSeed),
-        };
-        FlutterSecureStorage.setMockInitialValues(mockValues);
+    test('ignores unrelated and malformed keys cleanly', () async {
+      final validKey = makeBytes(42);
+      final validSeed = makeBytes(84);
+      final mockValues = <String, String>{
+        'unrelated_setting': 'some_value',
+        'persona_index': 'unrelated_index_entry',
+        'persona_seed_short': toHex(validSeed),
+        'persona_seed_${'zz' * 32}': toHex(validSeed),
+        'persona_seed_${toHex(makeBytes(9))}': 'not_valid_hex',
+        'persona_seed_${toHex(validKey)}': toHex(validSeed),
+      };
+      FlutterSecureStorage.setMockInitialValues(mockValues);
 
-        final keyring = FlutterSecureKeyringService();
-        final keys = await keyring.getAllIdentityKeys();
-        expect(keys, equals([validKey]));
+      final keyring = FlutterSecureKeyringService();
+      final keys = await keyring.getAllIdentityKeys();
+      expect(keys, equals([validKey]));
 
-        final seeds = await keyring.getAllSeeds();
-        expect(seeds, equals([validSeed]));
+      final seeds = await keyring.getAllSeeds();
+      expect(seeds, equals([validSeed]));
 
-        await keyring.clear();
-        // Unrelated user setting preserved; persona entries and legacy index cleared.
-        expect(await keyring.getAllIdentityKeys(), isEmpty);
-        const rawStorage = FlutterSecureStorage();
-        expect(
-          await rawStorage.read(key: 'unrelated_setting'),
-          equals('some_value'),
-        );
-        expect(await rawStorage.read(key: 'persona_index'), isNull);
-      },
-    );
+      await keyring.clear();
+      // Unrelated settings (including non-prefixed keys) are preserved; persona entries cleared.
+      expect(await keyring.getAllIdentityKeys(), isEmpty);
+      const rawStorage = FlutterSecureStorage();
+      expect(
+        await rawStorage.read(key: 'unrelated_setting'),
+        equals('some_value'),
+      );
+      expect(
+        await rawStorage.read(key: 'persona_index'),
+        equals('unrelated_index_entry'),
+      );
+    });
 
     test('rejects non-32-byte keys or seeds', () async {
       final keyring = FlutterSecureKeyringService();

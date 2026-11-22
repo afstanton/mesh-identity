@@ -4,7 +4,7 @@ A cross-platform reference and demonstration application for **[`mesh_identity`]
 
 Target Platforms: **iOS**, **Android**, **macOS**, **Windows**, and **Linux** (Web excluded).
 
-> **Current Status**: Foundation phase. Native integration with `mesh_identity` v0.5.0 from pub.dev, build-time parameterization, and end-to-end smoke tests are verified. Feature screens and UI controllers are actively under development.
+> **Current Status**: Responsive Shell & Core Node phases complete (Slices 1–2). Native integration with `mesh_identity` v0.5.0, transactional keyring + generational snapshot persistence, responsive adaptive shell, macOS HIG menu/toolbar, and About screen are complete. Practice Mode & Encounter ceremonies are next (Slice 3).
 
 ---
 
@@ -14,12 +14,13 @@ Target Platforms: **iOS**, **Android**, **macOS**, **Windows**, and **Linux** (W
 |---|---|---|
 | **Native Integration** | **Complete** | Proven FFI bindings via `mesh_identity` v0.5.0 on pub.dev. |
 | **Build-Time Parameterization** | **Complete** | Confidential store IDs via gitignored xcconfig & gradle properties. |
-| **Practice Mode Encounter** | **In Progress** | Single-device Alice & Bob ceremony with 6-digit SAS verification. |
-| **Secure Persistence** | **In Progress** | Platform Keychain/Keystore seed storage & atomic snapshot writes. |
+| **Secure Persistence** | **Complete** | Keychain/Keystore seed storage, envelope framing & generational atomic snapshots. |
+| **Responsive Shell & HIG** | **Complete** | Adaptive bottom bar / navigation rail, themes, and macOS unified toolbar + menu bar. |
+| **About Screen** | **Complete** | In-app MIT license, engine versions, and public repository link (`https://github.com/afstanton/mesh-identity`). |
+| **Practice Mode Encounter** | **Next** | Single-device Alice & Bob ceremony with 6-digit SAS verification. |
 | **Optical QR Transport** | **Planned** | Dynamic QR code generation, camera scanning, and clipboard/file import. |
 | **BLE Transport** | **Planned** | Offline Bluetooth Low Energy advertisement & GATT exchange. |
 | **OpenPGP & Groups** | **Planned** | Cross-certification preview disclosures & Byzantine group admission. |
-| **About Screen** | **Planned** | In-app license and public repository link (`https://github.com/afstanton/mesh-identity`). |
 
 ---
 
@@ -120,7 +121,9 @@ Platform files such as `GoogleService-Info.plist`, `google-services.json`, and `
 
 ## 4. Platform-Specific Store Features
 
-- **macOS App Store**: Window uses native unified top toolbar styling (`toolbarStyle = .unified`) compliant with Apple Human Interface Guidelines.
+- **macOS Keychain & Sandbox**: macOS uses the OS login keychain (`usesDataProtectionKeychain: false`) so sandboxed unsigned and CI builds run without provisioning-profile `-34018` entitlement errors (the first run may display a standard macOS Keychain access prompt).
+- **macOS Window & Menu Integration**: Window uses native unified top toolbar styling (`toolbarStyle = .unified`) with an `NSToolbar` and native `PlatformMenuBar` compliant with Apple Human Interface Guidelines.
+- **CI Verification**: GitHub Actions verifies formatting, strict analysis, Flutter tests, and debug builds on **macOS** and **Linux**. Windows, Android, and iOS CI builds will be added once `mesh_identity 0.5.1` publishes mobile/Windows triples in `native/rust-toolchain.toml`.
 - **In-App Open Source Attribution**: Includes a dedicated "About" screen displaying the license, cryptographic library version, and a direct link to the public repository.
 - **Hardware & Transports**:
   - **Optical QR Transport**: Supported across all desktop and mobile platforms (camera scanning on mobile/webcam, on-screen QR presentation, and text/clipboard import fallback).

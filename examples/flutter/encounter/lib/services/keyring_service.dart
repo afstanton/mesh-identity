@@ -52,7 +52,6 @@ Uint8List? _tryHexToBytes32(String? hex) {
 class FlutterSecureKeyringService implements SecureKeyringService {
   final FlutterSecureStorage _storage;
   static const String _prefix = 'persona_seed_';
-  static const String _legacyIndexKey = 'persona_index';
 
   Future<void> _queue = Future<void>.value();
 
@@ -185,7 +184,7 @@ class FlutterSecureKeyringService implements SecureKeyringService {
     return _serialized(() async {
       final all = await _storage.readAll();
       final keysToDelete = all.keys
-          .where((key) => key.startsWith(_prefix) || key == _legacyIndexKey)
+          .where((key) => key.startsWith(_prefix))
           .toList();
       for (final key in keysToDelete) {
         await _storage.delete(key: key);

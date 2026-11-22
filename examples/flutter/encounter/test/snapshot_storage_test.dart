@@ -160,33 +160,14 @@ void main() {
       },
     );
 
-    test(
-      'reads legacy unnumbered snapshot and upgrades to generation 1 on save',
-      () async {
-        final legacyFile = File(
-          p.join(tempDir.path, 'encounter_installation.snapshot'),
-        );
-        final legacyBytes = Uint8List.fromList([7, 7, 7, 7]);
-        await legacyFile.writeAsBytes(legacyBytes);
+    test('ignores stray unnumbered snapshot files', () async {
+      final strayFile = File(
+        p.join(tempDir.path, 'encounter_installation.snapshot'),
+      );
+      await strayFile.writeAsBytes(Uint8List.fromList([7, 7, 7, 7]));
 
-        expect(await storage.hasSnapshot(), isTrue);
-        expect(await storage.loadSnapshot(), equals(legacyBytes));
-
-        final upgradedBytes = Uint8List.fromList([8, 8, 8, 8]);
-        await storage.saveSnapshot(upgradedBytes);
-
-        expect(await legacyFile.exists(), isFalse);
-        expect(await storage.loadSnapshot(), equals(upgradedBytes));
-        final files = tempDir
-            .listSync()
-            .whereType<File>()
-            .map((f) => p.basename(f.path))
-            .toList();
-        expect(
-          files,
-          equals(['encounter_installation.snapshot.0000000000000001']),
-        );
-      },
-    );
+      expect(await storage.hasSnapshot(), isFalse);
+      expect(await storage.loadSnapshot(), isNull);
+    });
   });
 }

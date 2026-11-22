@@ -77,7 +77,15 @@ final class EncounterProtocolException extends MeshIdentityException {
 
 /// Thrown when encounter attempts are temporarily paused by the rate-limiting attempt policy.
 final class RateLimitedException extends MeshIdentityException {
-  const RateLimitedException(super.message);
+  const RateLimitedException(super.message, {this.untilMs});
+
+  /// Monotonic native deadline in milliseconds when the pause expires, if known.
+  final int? untilMs;
+}
+
+/// Thrown when assigning a local contact alias already used by another peer.
+final class AliasConflictException extends MeshIdentityException {
+  const AliasConflictException(super.message);
 }
 
 /// Thrown when attempting to confirm an encounter ceremony before a comparison code is available.

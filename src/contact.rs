@@ -323,6 +323,10 @@ impl ContactStore {
         self.contacts.len()
     }
 
+    pub fn iter(&self) -> impl Iterator<Item = &ContactRecordV1> {
+        self.contacts.values()
+    }
+
     /// Set a private alias. Rejects an alias already used by a different key (case-insensitive).
     /// Enforces non-empty content and MAX_ALIAS_BYTES (64 bytes UTF-8).
     pub fn set_alias(&mut self, peer_pk: &[u8; 32], alias: &str) -> Result<(), StoreError> {

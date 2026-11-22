@@ -728,6 +728,27 @@ impl Installation {
         Ok(())
     }
 
+    pub fn unblock_contact(&mut self, identity: Identity, peer: Identity) -> Result<(), Error> {
+        let store = self.contact_store_mut(identity)?;
+        if store.get(&peer).is_none() {
+            return Err(SessionError::Store(StoreError::UnknownContact).into());
+        }
+        store.unblock(&peer);
+        Ok(())
+    }
+
+    pub fn set_contact_alias(
+        &mut self,
+        identity: Identity,
+        peer: Identity,
+        alias: &str,
+    ) -> Result<(), Error> {
+        let store = self.contact_store_mut(identity)?;
+        store
+            .set_alias(&peer, alias)
+            .map_err(|error| SessionError::Store(error).into())
+    }
+
     /// Copy the public key into the destination contact store. An existing
     /// destination record keeps its own verification, alias, and block status.
     pub fn copy_contact(
@@ -1501,5 +1522,169 @@ impl Installation {
             recipient: request.recipient,
             pair: preview.pair,
         })
+    }
+}
+
+#[cfg(test)]
+mod contact_governance_tests {
+    use super::*;
+    use crate::contact::{ContactStatus, MAX_ALIAS_BYTES, VerificationStatus};
+    use rand::rngs::OsRng;
+
+    fn key(seed: u8) -> SigningKey {
+        SigningKey::from_bytes(&[seed; 32])
+    }
+
+    fn verify_peer(alice: &mut Installation, bob: &mut Installation, now: u64) {
+        let (ac, qr1) = alice.start(now, &mut OsRng).unwrap();
+        let bc = bob.open_scanner(now).unwrap();
+        let qr2 = bob.scan_offer(&bc, &qr1, now, &mut OsRng).unwrap();
+        let qr3 = alice.scan_response(&ac, &qr2, now).unwrap();
+        bob.scan_reveal(&bc, &qr3, now).unwrap();
+        let alice_comp = alice.comparison(&ac, now).unwrap().unwrap();
+        let bob_comp = bob.comparison(&bc, now).unwrap().unwrap();
+        alice
+            .confirm_and_save(&ac, alice_comp, bob_comp.code, now, now / 1000, &mut OsRng)
+            .unwrap();
+        bob.confirm_and_save(&bc, bob_comp, alice_comp.code, now, now / 1000, &mut OsRng)
+            .unwrap();
+    }
+
+    #[test]
+    fn contact_store_iter_yields_all_contacts() {
+        let mut inst = Installation::new(key(1));
+        let peer_a = Installation::new(key(2));
+        let peer_b = Installation::new(key(3));
+        let pk_a = peer_a.selected();
+        let pk_b = peer_b.selected();
+        let local = inst.selected();
+
+        inst.import_peer_key(local, pk_b, &mut OsRng).unwrap();
+        inst.import_peer_key(local, pk_a, &mut OsRng).unwrap();
+
+        let mut listed: Vec<Identity> = inst
+            .contacts(local)
+            .unwrap()
+            .iter()
+            .map(|c| c.peer_ed25519_pk)
+            .collect();
+        listed.sort();
+        let mut expected = vec![pk_a, pk_b];
+        expected.sort();
+        assert_eq!(listed, expected);
+    }
+
+    #[test]
+    fn unblock_contact_restores_active_and_persists() {
+        let mut alice = Installation::new(key(10));
+        let mut bob = Installation::new(key(11));
+        verify_peer(&mut alice, &mut bob, 1_700_000_000_000);
+        let alice_pk = alice.selected();
+        let bob_pk = bob.selected();
+
+        alice.block_contact(alice_pk, bob_pk).unwrap();
+        assert_eq!(
+            alice.contacts(alice_pk).unwrap().get(&bob_pk).unwrap().status,
+            ContactStatus::Blocked
+        );
+
+        alice.unblock_contact(alice_pk, bob_pk).unwrap();
+        let record = alice.contacts(alice_pk).unwrap().get(&bob_pk).unwrap();
+        assert_eq!(record.status, ContactStatus::Active);
+        assert_eq!(record.verification_status, VerificationStatus::Verified);
+
+        let bytes = alice.save_bytes(1_700_000_001_000).unwrap();
+        let restored = Installation::restore_bytes(&bytes, [key(10)]).unwrap();
+        let restored_record = restored.contacts(alice_pk).unwrap().get(&bob_pk).unwrap();
+        assert_eq!(restored_record.status, ContactStatus::Active);
+        assert_eq!(
+            restored_record.verification_status,
+            VerificationStatus::Verified
+        );
+
+        assert_eq!(
+            alice.unblock_contact(alice_pk, [0x99; 32]),
+            Err(Error::Session(SessionError::Store(
+                StoreError::UnknownContact
+            )))
+        );
+        assert_eq!(
+            alice.unblock_contact([0x88; 32], bob_pk),
+            Err(Error::UnknownIdentity)
+        );
+    }
+
+    #[test]
+    fn set_contact_alias_validates_conflicts_and_persists() {
+        let mut alice = Installation::new(key(20));
+        let peer_a = Installation::new(key(21)).selected();
+        let peer_b = Installation::new(key(22)).selected();
+        let alice_pk = alice.selected();
+
+        alice.import_peer_key(alice_pk, peer_a, &mut OsRng).unwrap();
+        alice.import_peer_key(alice_pk, peer_b, &mut OsRng).unwrap();
+
+        alice
+            .set_contact_alias(alice_pk, peer_a, "  Alice Friend  ")
+            .unwrap();
+        assert_eq!(
+            alice
+                .contacts(alice_pk)
+                .unwrap()
+                .get(&peer_a)
+                .unwrap()
+                .local_alias
+                .as_deref(),
+            Some("Alice Friend")
+        );
+
+        // Case-only update on same peer succeeds.
+        alice
+            .set_contact_alias(alice_pk, peer_a, "alice friend")
+            .unwrap();
+
+        // Case-insensitive conflict on different peer fails.
+        assert_eq!(
+            alice.set_contact_alias(alice_pk, peer_b, "ALICE FRIEND"),
+            Err(Error::Session(SessionError::Store(
+                StoreError::AliasConflict {
+                    existing_pk: peer_a
+                }
+            )))
+        );
+
+        // Empty / too-long / unknown contact / unknown identity errors.
+        assert_eq!(
+            alice.set_contact_alias(alice_pk, peer_a, "   "),
+            Err(Error::Session(SessionError::Store(StoreError::EmptyAlias)))
+        );
+        let too_long = "x".repeat(MAX_ALIAS_BYTES + 1);
+        assert_eq!(
+            alice.set_contact_alias(alice_pk, peer_a, &too_long),
+            Err(Error::Session(SessionError::Store(StoreError::AliasTooLong)))
+        );
+        assert_eq!(
+            alice.set_contact_alias(alice_pk, [0x77; 32], "Other"),
+            Err(Error::Session(SessionError::Store(
+                StoreError::UnknownContact
+            )))
+        );
+        assert_eq!(
+            alice.set_contact_alias([0x66; 32], peer_a, "Other"),
+            Err(Error::UnknownIdentity)
+        );
+
+        let bytes = alice.save_bytes(1_700_000_002_000).unwrap();
+        let restored = Installation::restore_bytes(&bytes, [key(20)]).unwrap();
+        assert_eq!(
+            restored
+                .contacts(alice_pk)
+                .unwrap()
+                .get(&peer_a)
+                .unwrap()
+                .local_alias
+                .as_deref(),
+            Some("alice friend")
+        );
     }
 }

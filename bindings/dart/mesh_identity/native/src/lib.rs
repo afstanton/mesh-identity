@@ -41,6 +41,7 @@ pub const MESH_ERR_DUPLICATE_GROUP: i32 = -24;
 pub const MESH_ERR_TOO_LARGE: i32 = -25;
 pub const MESH_ERR_MALFORMED: i32 = -26;
 pub const MESH_ERR_FORMATION: i32 = -27;
+pub const MESH_ERR_ALIAS_CONFLICT: i32 = -28;
 
 // OpenPGP error codes
 pub const MESH_ERR_OPENPGP_CERTIFICATE: i32 = -3001;
@@ -61,13 +62,18 @@ const MAX_OPENPGP_CERTIFICATE_BYTES: usize = 256 * 1024; // 256 KiB
 const MAX_OPENPGP_DOCUMENT_BYTES: usize = 16 * 1024 * 1024; // 16 MiB
 const MAX_OPENPGP_USER_ID_BYTES: usize = 2048;
 const MAX_OPENPGP_PASSPHRASE_BYTES: usize = 2048;
+const MAX_ALIAS_INPUT_BYTES: usize = 256;
 
 thread_local! {
     static LAST_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+    static LAST_RATE_LIMIT_UNTIL_MS: RefCell<Option<u64>> = const { RefCell::new(None) };
 }
 
 fn clear_last_error() {
     LAST_ERROR.with(|cell| {
+        *cell.borrow_mut() = None;
+    });
+    LAST_RATE_LIMIT_UNTIL_MS.with(|cell| {
         *cell.borrow_mut() = None;
     });
 }
@@ -99,7 +105,14 @@ fn map_installation_error(err: &mesh_identity::session::installation::Error) -> 
         Error::HandoffWriteFailed => MESH_ERR_HANDOFF_WRITE_FAILED,
         Error::CeremonyActive => MESH_ERR_CEREMONY_ACTIVE,
         Error::StaleCeremony => MESH_ERR_STALE_CEREMONY,
-        Error::Session(mesh_identity::session::SessionError::Attempt(_)) => MESH_ERR_RATE_LIMITED,
+        Error::Session(mesh_identity::session::SessionError::Attempt(attempt)) => {
+            if let mesh_identity::session::AttemptError::Paused { until_ms } = attempt {
+                LAST_RATE_LIMIT_UNTIL_MS.with(|cell| {
+                    *cell.borrow_mut() = Some(*until_ms);
+                });
+            }
+            MESH_ERR_RATE_LIMITED
+        }
         Error::Session(mesh_identity::session::SessionError::Protocol(_)) => MESH_ERR_PROTOCOL,
         Error::Session(mesh_identity::session::SessionError::NoLiveSession) => {
             MESH_ERR_STALE_CEREMONY
@@ -113,6 +126,13 @@ fn map_installation_error(err: &mesh_identity::session::installation::Error) -> 
         Error::Session(mesh_identity::session::SessionError::Store(
             mesh_identity::contact::StoreError::UnknownContact,
         )) => MESH_ERR_NOT_FOUND,
+        Error::Session(mesh_identity::session::SessionError::Store(
+            mesh_identity::contact::StoreError::AliasConflict { .. },
+        )) => MESH_ERR_ALIAS_CONFLICT,
+        Error::Session(mesh_identity::session::SessionError::Store(
+            mesh_identity::contact::StoreError::EmptyAlias
+            | mesh_identity::contact::StoreError::AliasTooLong,
+        )) => MESH_ERR_INVALID_ARG,
         _ => MESH_ERR_INTERNAL,
     }
 }
@@ -142,6 +162,37 @@ pub unsafe extern "C" fn mesh_last_error(out_buf: *mut c_char, max_len: usize) -
                 if copy_len == max_len {
                     *out_buf.add(max_len - 1) = 0;
                 }
+            }
+            MESH_OK
+        })
+    }));
+    result.unwrap_or(MESH_ERR_PANIC)
+}
+
+/// Retrieve and clear the last recorded rate-limit pause deadline (`until_ms`) on the calling thread.
+///
+/// # Safety
+///
+/// - `out_until_ms` and `out_has_value` must be valid, non-null writable pointers.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_last_rate_limit_until_ms(
+    out_until_ms: *mut u64,
+    out_has_value: *mut bool,
+) -> i32 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if out_until_ms.is_null() || out_has_value.is_null() {
+            return MESH_ERR_INVALID_ARG;
+        }
+        LAST_RATE_LIMIT_UNTIL_MS.with(|cell| {
+            match cell.borrow_mut().take() {
+                Some(until_ms) => unsafe {
+                    *out_until_ms = until_ms;
+                    *out_has_value = true;
+                },
+                None => unsafe {
+                    *out_until_ms = 0;
+                    *out_has_value = false;
+                },
             }
             MESH_OK
         })
@@ -681,6 +732,40 @@ struct ContactExportJson {
     pub verified_at: u64,
 }
 
+fn contact_to_json(c: &mesh_identity::contact::ContactRecordV1) -> ContactExportJson {
+    ContactExportJson {
+        peer_public_key: hex::encode(c.peer_ed25519_pk),
+        alias: c.local_alias.clone(),
+        status: match c.status {
+            ContactStatus::Active => "active".into(),
+            ContactStatus::Blocked => "blocked".into(),
+        },
+        verification_status: match c.verification_status {
+            VerificationStatus::Verified => "verified".into(),
+            VerificationStatus::ImportedUnverified => "imported_unverified".into(),
+        },
+        encounter_count: c.encounter_count,
+        verified_at: c.verified_at,
+    }
+}
+
+fn resolve_identity_arg(
+    installation: &Installation,
+    identity_pk: *const u8,
+    identity_pk_len: usize,
+) -> Result<[u8; 32], i32> {
+    if identity_pk.is_null() {
+        return Ok(installation.selected());
+    }
+    if identity_pk_len != 32 {
+        set_last_error("identity_pk must be 32 bytes");
+        return Err(MESH_ERR_INVALID_ARG);
+    }
+    let mut pk = [0u8; 32];
+    pk.copy_from_slice(unsafe { slice::from_raw_parts(identity_pk, 32) });
+    Ok(pk)
+}
+
 /// Return the count of contacts registered for an identity.
 ///
 /// If `identity_pk` is null, uses the selected identity.
@@ -778,20 +863,7 @@ pub unsafe extern "C" fn mesh_installation_get_contact(
 
         match store.get(&peer) {
             Some(c) => {
-                let info = ContactExportJson {
-                    peer_public_key: hex::encode(c.peer_ed25519_pk),
-                    alias: c.local_alias.clone(),
-                    status: match c.status {
-                        ContactStatus::Active => "active".into(),
-                        ContactStatus::Blocked => "blocked".into(),
-                    },
-                    verification_status: match c.verification_status {
-                        VerificationStatus::Verified => "verified".into(),
-                        VerificationStatus::ImportedUnverified => "imported_unverified".into(),
-                    },
-                    encounter_count: c.encounter_count,
-                    verified_at: c.verified_at,
-                };
+                let info = contact_to_json(c);
                 let json_str = match serde_json::to_string(&info) {
                     Ok(s) => s,
                     Err(e) => {
@@ -874,6 +946,194 @@ pub unsafe extern "C" fn mesh_installation_block_contact(
         peer.copy_from_slice(unsafe { slice::from_raw_parts(peer_pk, 32) });
 
         match handle.installation.block_contact(id, peer) {
+            Ok(()) => MESH_OK,
+            Err(e) => {
+                set_last_error(e.to_string());
+                map_installation_error(&e)
+            }
+        }
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// List all contact records for an identity as a JSON array string in `*out_json`.
+///
+/// If `identity_pk` is null, uses the selected identity.
+/// The string written to `*out_json` must be freed via `mesh_string_free`.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshInstallationHandle`.
+/// - If `identity_pk` is non-null, `identity_pk_len` must be 32.
+/// - `out_json` must be a valid, non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_installation_list_contacts(
+    handle: *const MeshInstallationHandle,
+    identity_pk: *const u8,
+    identity_pk_len: usize,
+    out_json: *mut *mut c_char,
+) -> i32 {
+    clear_last_error();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() || out_json.is_null() {
+            set_last_error("invalid arguments passed to mesh_installation_list_contacts");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &*handle };
+        if handle.is_poisoned {
+            set_last_error("installation handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        let id = match resolve_identity_arg(&handle.installation, identity_pk, identity_pk_len) {
+            Ok(pk) => pk,
+            Err(code) => return code,
+        };
+        let store = match handle.installation.contacts(id) {
+            Some(s) => s,
+            None => {
+                set_last_error("unknown identity in mesh_installation_list_contacts");
+                return MESH_ERR_UNKNOWN_IDENTITY;
+            }
+        };
+
+        let mut list: Vec<ContactExportJson> = store.iter().map(contact_to_json).collect();
+        list.sort_by(|a, b| a.peer_public_key.cmp(&b.peer_public_key));
+
+        let json_str = match serde_json::to_string(&list) {
+            Ok(s) => s,
+            Err(e) => {
+                set_last_error(e.to_string());
+                return MESH_ERR_INTERNAL;
+            }
+        };
+        let c_str = match CString::new(json_str) {
+            Ok(s) => s,
+            Err(_) => return MESH_ERR_INTERNAL,
+        };
+        unsafe {
+            *out_json = c_str.into_raw();
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        set_last_error("native panic caught at FFI boundary");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Unblock a previously blocked peer contact without altering its verification state.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshInstallationHandle`.
+/// - If `identity_pk` is non-null, `identity_pk_len` must be 32.
+/// - `peer_pk` must point to at least `peer_pk_len` readable bytes (`peer_pk_len` must be 32).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_installation_unblock_contact(
+    handle: *mut MeshInstallationHandle,
+    identity_pk: *const u8,
+    identity_pk_len: usize,
+    peer_pk: *const u8,
+    peer_pk_len: usize,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() || peer_pk.is_null() || peer_pk_len != 32 {
+            set_last_error("invalid arguments passed to mesh_installation_unblock_contact");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("installation handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        let id = match resolve_identity_arg(&handle.installation, identity_pk, identity_pk_len) {
+            Ok(pk) => pk,
+            Err(code) => return code,
+        };
+        let mut peer = [0u8; 32];
+        peer.copy_from_slice(unsafe { slice::from_raw_parts(peer_pk, 32) });
+
+        match handle.installation.unblock_contact(id, peer) {
+            Ok(()) => MESH_OK,
+            Err(e) => {
+                set_last_error(e.to_string());
+                map_installation_error(&e)
+            }
+        }
+    }));
+    result.unwrap_or_else(|_| {
+        if !handle_ptr.is_null() {
+            unsafe {
+                (*handle_ptr).is_poisoned = true;
+            }
+        }
+        set_last_error("native panic caught at FFI boundary; handle is now poisoned");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Set or update the local alias for a peer contact.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshInstallationHandle`.
+/// - If `identity_pk` is non-null, `identity_pk_len` must be 32.
+/// - `peer_pk` must point to at least `peer_pk_len` readable bytes (`peer_pk_len` must be 32).
+/// - `alias_ptr` must point to at least `alias_len` readable UTF-8 bytes (`alias_len <= 256`).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_installation_set_contact_alias(
+    handle: *mut MeshInstallationHandle,
+    identity_pk: *const u8,
+    identity_pk_len: usize,
+    peer_pk: *const u8,
+    peer_pk_len: usize,
+    alias_ptr: *const u8,
+    alias_len: usize,
+) -> i32 {
+    clear_last_error();
+    let handle_ptr = handle;
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null()
+            || peer_pk.is_null()
+            || peer_pk_len != 32
+            || alias_ptr.is_null()
+            || alias_len > MAX_ALIAS_INPUT_BYTES
+        {
+            set_last_error("invalid arguments passed to mesh_installation_set_contact_alias");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let handle = unsafe { &mut *handle };
+        if handle.is_poisoned {
+            set_last_error("installation handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        let id = match resolve_identity_arg(&handle.installation, identity_pk, identity_pk_len) {
+            Ok(pk) => pk,
+            Err(code) => return code,
+        };
+        let mut peer = [0u8; 32];
+        peer.copy_from_slice(unsafe { slice::from_raw_parts(peer_pk, 32) });
+
+        let alias_bytes = unsafe { slice::from_raw_parts(alias_ptr, alias_len) };
+        let alias_str = match std::str::from_utf8(alias_bytes) {
+            Ok(s) => s,
+            Err(_) => {
+                set_last_error("alias must be valid UTF-8");
+                return MESH_ERR_INVALID_ARG;
+            }
+        };
+
+        match handle.installation.set_contact_alias(id, peer, alias_str) {
             Ok(()) => MESH_OK,
             Err(e) => {
                 set_last_error(e.to_string());
@@ -1388,20 +1648,7 @@ pub unsafe extern "C" fn mesh_installation_confirm_and_save(
             &mut OsRng,
         ) {
             Ok(record) => {
-                let info = ContactExportJson {
-                    peer_public_key: hex::encode(record.peer_ed25519_pk),
-                    alias: record.local_alias.clone(),
-                    status: match record.status {
-                        ContactStatus::Active => "active".into(),
-                        ContactStatus::Blocked => "blocked".into(),
-                    },
-                    verification_status: match record.verification_status {
-                        VerificationStatus::Verified => "verified".into(),
-                        VerificationStatus::ImportedUnverified => "imported_unverified".into(),
-                    },
-                    encounter_count: record.encounter_count,
-                    verified_at: record.verified_at,
-                };
+                let info = contact_to_json(&record);
                 let json_str = match serde_json::to_string(&info) {
                     Ok(s) => s,
                     Err(e) => {

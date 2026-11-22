@@ -1,3 +1,11 @@
+## 0.5.1
+
+- Added contact governance methods on `MeshInstallation`: `listContacts`, `unblockContact`, and `setContactAlias` (with `MeshInstallation.maxAliasBytes = 64` and `AliasConflictException`).
+- Added structured `untilMs` field on `RateLimitedException` populated directly from native `AttemptError::Paused { until_ms }` (no message-string parsing required).
+- Added statutory UI constants on `EncounterComparison`: `localOnlyConfirmation`, `interferenceWarning`, and `aliasConflictWarning`.
+- Added iOS, Android, and Windows Rust targets to `native/rust-toolchain.toml` alongside existing macOS and Linux targets.
+- Updated native `mesh-identity` dependency to `0.2.1`.
+
 ## 0.5.0
 
 - Added OpenPGP Interoperability Bridge (Slice 5).

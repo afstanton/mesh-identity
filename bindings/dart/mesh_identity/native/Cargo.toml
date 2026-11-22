@@ -7,7 +7,7 @@ edition = "2024"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-mesh-identity = { version = "0.2.0", features = ["groups", "openpgp"] }
+mesh-identity = { version = "0.2.1", features = ["groups", "openpgp"] }
 ed25519-dalek = { version = "2.1", features = ["rand_core"] }
 rand = "0.8"
 zeroize = "1.8"

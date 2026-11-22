@@ -201,6 +201,18 @@ class EncounterComparison {
   static const String notIdentityProof =
       'This confirms a key, not who a person is. One person can have several keys.';
 
+  /// Notice shown after confirming a contact locally.
+  static const String localOnlyConfirmation =
+      'Saved on this device only. The other device may not have saved you, and cancelling there cannot undo this.';
+
+  /// Warning shown after repeated incomplete encounter attempts.
+  static const String interferenceWarning =
+      'Several attempts did not finish. This can mean something is interfering with the exchange. Wait before trying again.';
+
+  /// Warning shown when a peer alias conflicts with an existing contact's key.
+  static const String aliasConflictWarning =
+      'Different cryptographic identity from previously saved contact with this name.';
+
   @override
   bool operator ==(Object other) =>
       identical(this, other) ||

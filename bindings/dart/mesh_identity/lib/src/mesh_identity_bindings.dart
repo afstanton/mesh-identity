@@ -164,6 +164,14 @@ external int mesh_installation_get_contact(
 external void mesh_string_free(ffi.Pointer<ffi.Char> ptr);
 
 @ffi.Native<
+  ffi.Int32 Function(ffi.Pointer<ffi.Uint64>, ffi.Pointer<ffi.Bool>)
+>()
+external int mesh_last_rate_limit_until_ms(
+  ffi.Pointer<ffi.Uint64> outUntilMs,
+  ffi.Pointer<ffi.Bool> outHasValue,
+);
+
+@ffi.Native<
   ffi.Int32 Function(
     ffi.Pointer<ffi.Void>,
     ffi.Pointer<ffi.Uint8>,
@@ -178,6 +186,59 @@ external int mesh_installation_block_contact(
   int identityPkLen,
   ffi.Pointer<ffi.Uint8> peerPk,
   int peerPkLen,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Pointer<ffi.Char>>,
+  )
+>()
+external int mesh_installation_list_contacts(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Uint8> identityPk,
+  int identityPkLen,
+  ffi.Pointer<ffi.Pointer<ffi.Char>> outJson,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+  )
+>()
+external int mesh_installation_unblock_contact(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Uint8> identityPk,
+  int identityPkLen,
+  ffi.Pointer<ffi.Uint8> peerPk,
+  int peerPkLen,
+);
+
+@ffi.Native<
+  ffi.Int32 Function(
+    ffi.Pointer<ffi.Void>,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+    ffi.Pointer<ffi.Uint8>,
+    ffi.Size,
+  )
+>()
+external int mesh_installation_set_contact_alias(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Uint8> identityPk,
+  int identityPkLen,
+  ffi.Pointer<ffi.Uint8> peerPk,
+  int peerPkLen,
+  ffi.Pointer<ffi.Uint8> aliasPtr,
+  int aliasLen,
 );
 
 @ffi.Native<
@@ -911,6 +972,7 @@ abstract final class MeshIdentityBindings {
   static const int meshErrTooLarge = -25;
   static const int meshErrMalformed = -26;
   static const int meshErrFormation = -27;
+  static const int meshErrAliasConflict = -28;
 
   // OpenPGP error codes
   static const int meshErrOpenPgpCertificate = -3001;
@@ -929,6 +991,17 @@ abstract final class MeshIdentityBindings {
       if (res != 0) return null;
       final str = buf.cast<Utf8>().toDartString();
       return str.isEmpty ? null : str;
+    });
+  }
+
+  /// Retrieve and clear the last recorded rate-limit pause deadline from native TLS.
+  static int? getLastRateLimitUntilMs() {
+    return using((Arena arena) {
+      final outUntilMs = arena<ffi.Uint64>();
+      final outHasValue = arena<ffi.Bool>();
+      final res = mesh_last_rate_limit_until_ms(outUntilMs, outHasValue);
+      if (res != 0 || !outHasValue.value) return null;
+      return outUntilMs.value;
     });
   }
 
@@ -959,7 +1032,9 @@ abstract final class MeshIdentityBindings {
       case meshErrProtocol:
         throw EncounterProtocolException(errText);
       case meshErrRateLimited:
-        throw RateLimitedException(errText);
+        throw RateLimitedException(errText, untilMs: getLastRateLimitUntilMs());
+      case meshErrAliasConflict:
+        throw AliasConflictException(errText);
       case meshErrIndexOutOfBounds:
         throw IndexOutOfBoundsException(errText);
       case meshErrNoComparison:

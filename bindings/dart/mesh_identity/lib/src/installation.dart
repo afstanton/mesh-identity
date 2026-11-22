@@ -32,6 +32,9 @@ class MeshInstallation implements ffi.Finalizable {
   /// Maximum length of an OpenPGP passphrase in UTF-8 bytes (2048 bytes).
   static const int maxOpenPgpPassphraseBytes = 2048;
 
+  /// Maximum trimmed length of a local contact alias in UTF-8 bytes (64 bytes).
+  static const int maxAliasBytes = 64;
+
   /// Generate a cryptographically secure 32-byte Ed25519 signing seed.
   ///
   /// Callers should retain this seed in secure storage (e.g. keychain / secure enclave)
@@ -468,6 +471,145 @@ class MeshInstallation implements ffi.Finalizable {
         32,
       );
       _checkResult(res, 'Failed to block contact');
+    });
+  }
+
+  /// List all contacts stored for [identityKey] (or selected identity if null),
+  /// ordered deterministically by peer public key.
+  List<Contact> listContacts({Uint8List? identityKey}) {
+    _checkDisposed();
+    if (identityKey != null && identityKey.length != 32) {
+      throw const InvalidArgumentsException(
+        'Identity key must be exactly 32 bytes',
+      );
+    }
+
+    return using((Arena arena) {
+      ffi.Pointer<ffi.Uint8> idPtr = ffi.nullptr;
+      var idLen = 0;
+      if (identityKey != null) {
+        idLen = 32;
+        idPtr = arena<ffi.Uint8>(32);
+        idPtr.asTypedList(32).setAll(0, identityKey);
+      }
+
+      final outJson = arena<ffi.Pointer<ffi.Char>>();
+      final res = mesh_installation_list_contacts(
+        _handle,
+        idPtr,
+        idLen,
+        outJson,
+      );
+      _checkResult(res, 'Failed to list contacts');
+
+      final jsonPtr = outJson.value;
+      if (jsonPtr == ffi.nullptr) return const [];
+
+      try {
+        final jsonStr = jsonPtr.cast<Utf8>().toDartString();
+        final list = jsonDecode(jsonStr) as List<dynamic>;
+        return List<Contact>.unmodifiable(
+          list.map((e) => Contact.fromJson(e as Map<String, dynamic>)),
+        );
+      } finally {
+        mesh_string_free(jsonPtr);
+      }
+    });
+  }
+
+  /// Unblock a previously blocked [peerPublicKey] without changing verification status.
+  void unblockContact(Uint8List peerPublicKey, {Uint8List? identityKey}) {
+    _checkDisposed();
+    if (peerPublicKey.length != 32) {
+      throw const InvalidArgumentsException(
+        'Peer public key must be exactly 32 bytes',
+      );
+    }
+    if (identityKey != null && identityKey.length != 32) {
+      throw const InvalidArgumentsException(
+        'Identity key must be exactly 32 bytes',
+      );
+    }
+
+    using((Arena arena) {
+      ffi.Pointer<ffi.Uint8> idPtr = ffi.nullptr;
+      var idLen = 0;
+      if (identityKey != null) {
+        idLen = 32;
+        idPtr = arena<ffi.Uint8>(32);
+        idPtr.asTypedList(32).setAll(0, identityKey);
+      }
+
+      final peerPtr = arena<ffi.Uint8>(32);
+      peerPtr.asTypedList(32).setAll(0, peerPublicKey);
+
+      final res = mesh_installation_unblock_contact(
+        _handle,
+        idPtr,
+        idLen,
+        peerPtr,
+        32,
+      );
+      _checkResult(res, 'Failed to unblock contact');
+    });
+  }
+
+  /// Set or update the private local [alias] for [peerPublicKey].
+  ///
+  /// Throws [InvalidArgumentsException] if [alias] is empty after trimming or
+  /// exceeds [maxAliasBytes] UTF-8 bytes, or [AliasConflictException] if another
+  /// contact already uses the same alias (case-insensitive).
+  void setContactAlias(
+    Uint8List peerPublicKey,
+    String alias, {
+    Uint8List? identityKey,
+  }) {
+    _checkDisposed();
+    if (peerPublicKey.length != 32) {
+      throw const InvalidArgumentsException(
+        'Peer public key must be exactly 32 bytes',
+      );
+    }
+    if (identityKey != null && identityKey.length != 32) {
+      throw const InvalidArgumentsException(
+        'Identity key must be exactly 32 bytes',
+      );
+    }
+    if (alias.trim().isEmpty) {
+      throw const InvalidArgumentsException('Contact alias cannot be empty');
+    }
+    final aliasBytes = utf8.encode(alias);
+    if (aliasBytes.length > 256) {
+      throw const InvalidArgumentsException(
+        'Contact alias exceeds maximum input length (256 bytes)',
+      );
+    }
+
+    using((Arena arena) {
+      ffi.Pointer<ffi.Uint8> idPtr = ffi.nullptr;
+      var idLen = 0;
+      if (identityKey != null) {
+        idLen = 32;
+        idPtr = arena<ffi.Uint8>(32);
+        idPtr.asTypedList(32).setAll(0, identityKey);
+      }
+
+      final peerPtr = arena<ffi.Uint8>(32);
+      peerPtr.asTypedList(32).setAll(0, peerPublicKey);
+
+      final aliasPtr = arena<ffi.Uint8>(aliasBytes.length);
+      aliasPtr.asTypedList(aliasBytes.length).setAll(0, aliasBytes);
+
+      final res = mesh_installation_set_contact_alias(
+        _handle,
+        idPtr,
+        idLen,
+        peerPtr,
+        32,
+        aliasPtr,
+        aliasBytes.length,
+      );
+      _checkResult(res, 'Failed to set contact alias');
     });
   }
 

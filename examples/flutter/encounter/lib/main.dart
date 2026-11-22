@@ -5,6 +5,8 @@ import 'package:material_ui/material_ui.dart';
 import 'core/config.dart';
 import 'core/theme.dart';
 import 'features/about/about_view.dart';
+import 'features/contacts/contacts_view.dart';
+import 'features/identity/identity_view.dart';
 import 'features/overview/encounter_home_view.dart';
 import 'features/placeholders/slice_placeholder_view.dart';
 import 'services/identity_controller.dart';
@@ -149,11 +151,9 @@ class _EncounterAppState extends State<EncounterApp> {
   Widget _buildDestinationBody() {
     return switch (_selectedDestination) {
       AppDestination.encounter => EncounterHomeView(controller: _controller),
-      AppDestination.contacts => ContactsPlaceholderView(
-        controller: _controller,
-      ),
+      AppDestination.contacts => ContactsView(controller: _controller),
       AppDestination.groups => const GroupsPlaceholderView(),
-      AppDestination.identity => IdentityOverviewView(controller: _controller),
+      AppDestination.identity => IdentityView(controller: _controller),
       AppDestination.about => AboutView(linkLauncher: _linkLauncher),
     };
   }

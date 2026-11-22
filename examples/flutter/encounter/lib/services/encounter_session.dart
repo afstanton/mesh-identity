@@ -63,13 +63,15 @@ abstract final class EncounterUiText {
 
   /// Required notice clarifying that confirmation is local to each device.
   static const String localOnlyConfirmation =
-      'Saved on this device only. The other device may not have saved you, '
-      'and cancelling there cannot undo this.';
+      EncounterComparison.localOnlyConfirmation;
 
   /// Required warning displayed after repeated incomplete attempts.
   static const String interferenceWarning =
-      'Several attempts did not finish. This can mean something is '
-      'interfering with the exchange. Wait before trying again.';
+      EncounterComparison.interferenceWarning;
+
+  /// Required warning displayed when an alias conflicts with an existing peer.
+  static const String aliasConflictWarning =
+      EncounterComparison.aliasConflictWarning;
 
   /// Session lifetime enforced by `mesh_identity::session::SESSION_TIMEOUT_MS`.
   static const Duration sessionTimeout = Duration(milliseconds: 120000);
@@ -80,8 +82,6 @@ abstract final class EncounterUiText {
 
 /// Immutable UI projection of the active or most recent Encounter ceremony.
 class EncounterSessionState {
-  static final RegExp _pausedUntilRegex = RegExp(r'until\s+(\d+)\s*ms');
-
   final EncounterPhase phase;
   final EncounterRole? role;
   final String? outgoingUri;
@@ -152,16 +152,12 @@ class EncounterSessionState {
     return target.difference(now);
   }
 
-  /// Parse `until <ms> ms` from `RateLimitedException.message` until `mesh_identity`
-  /// 0.5.1 exposes a structured `untilMs` field, falling back to
-  /// [EncounterUiText.rateLimitPause] from [now].
-  static DateTime parsePausedUntil(String message, DateTime now) {
-    final match = _pausedUntilRegex.firstMatch(message);
-    if (match != null) {
-      final parsed = int.tryParse(match.group(1)!);
-      if (parsed != null && parsed > now.millisecondsSinceEpoch) {
-        return DateTime.fromMillisecondsSinceEpoch(parsed);
-      }
+  /// Resolve the rate-limit expiry from [RateLimitedException.untilMs], falling
+  /// back to [EncounterUiText.rateLimitPause] from [now].
+  static DateTime resolvePausedUntil(RateLimitedException error, DateTime now) {
+    final untilMs = error.untilMs;
+    if (untilMs != null && untilMs > now.millisecondsSinceEpoch) {
+      return DateTime.fromMillisecondsSinceEpoch(untilMs);
     }
     return now.add(EncounterUiText.rateLimitPause);
   }
@@ -249,4 +245,27 @@ String formatCountdown(Duration duration) {
   final seconds = totalSeconds % 60;
   return '${minutes.toString().padLeft(2, '0')}:'
       '${seconds.toString().padLeft(2, '0')}';
+}
+
+/// Parse a 32-byte Ed25519 public key from a 64-character hex string.
+///
+/// Ignores surrounding whitespace and optional `0x` prefix. Throws a
+/// [FormatException] if the input is not 64 valid hexadecimal characters.
+Uint8List parseHexPublicKey(String input) {
+  var normalized = input.replaceAll(RegExp(r'\s+'), '');
+  if (normalized.startsWith('0x') || normalized.startsWith('0X')) {
+    normalized = normalized.substring(2);
+  }
+  const expectedHexLength = 64;
+  if (normalized.length != expectedHexLength ||
+      !RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(normalized)) {
+    throw const FormatException(
+      'Enter a 64-character hexadecimal Ed25519 public key.',
+    );
+  }
+  final bytes = Uint8List(32);
+  for (var i = 0; i < 32; i++) {
+    bytes[i] = int.parse(normalized.substring(i * 2, i * 2 + 2), radix: 16);
+  }
+  return bytes;
 }

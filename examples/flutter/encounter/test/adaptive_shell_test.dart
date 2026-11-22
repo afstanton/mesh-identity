@@ -1,5 +1,7 @@
 import 'package:encounter/core/config.dart';
 import 'package:encounter/features/about/about_view.dart';
+import 'package:encounter/features/contacts/contacts_view.dart';
+import 'package:encounter/features/identity/identity_view.dart';
 import 'package:encounter/features/placeholders/slice_placeholder_view.dart';
 import 'package:encounter/main.dart';
 import 'package:encounter/services/identity_controller.dart';
@@ -91,7 +93,7 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        expect(find.byType(ContactsPlaceholderView), findsOneWidget);
+        expect(find.byType(ContactsView), findsOneWidget);
 
         await tester.tap(
           find.descendant(
@@ -109,7 +111,7 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        expect(find.byType(IdentityOverviewView), findsOneWidget);
+        expect(find.byType(IdentityView), findsOneWidget);
 
         await tester.tap(
           find.descendant(
@@ -246,7 +248,7 @@ void main() {
         expect(contactsItem.onSelected, isNotNull);
         contactsItem.onSelected!();
         await tester.pumpAndSettle();
-        expect(find.byType(ContactsPlaceholderView), findsOneWidget);
+        expect(find.byType(ContactsView), findsOneWidget);
 
         // View -> Appearance -> Dark
         final darkItem = _findMenuItem(viewMenu, 'Dark');

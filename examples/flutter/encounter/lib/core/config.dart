@@ -15,10 +15,10 @@ abstract final class AppConfig {
   static const String appVersion = '1.0.0+1';
 
   /// Version of the `mesh_identity` Dart binding package on pub.dev.
-  static const String meshIdentityBindingVersion = '0.5.0';
+  static const String meshIdentityBindingVersion = '0.5.1';
 
   /// Version of the underlying `mesh-identity` Rust crate on crates.io.
-  static const String meshIdentityCoreVersion = '0.2.0';
+  static const String meshIdentityCoreVersion = '0.2.1';
 
   /// Short license title.
   static const String licenseName = 'MIT License';

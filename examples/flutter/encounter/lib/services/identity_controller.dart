@@ -45,6 +45,8 @@ class IdentityController extends ChangeNotifier {
   Uint8List? _cachedSelectedIdentity;
   List<Uint8List> _cachedIdentities = const [];
   int _cachedContactsCount = 0;
+  List<Contact> _cachedContacts = const [];
+  Map<String, int> _cachedPersonaContactCounts = const {};
 
   Future<void> _queue = Future<void>.value();
   bool _isDisposed = false;
@@ -58,21 +60,7 @@ class IdentityController extends ChangeNotifier {
   }) : _keyring = keyring ?? FlutterSecureKeyringService(),
        _storage = storage ?? FileSnapshotStorageService(),
        _clock = clock ?? DateTime.now {
-    _encounter = EncounterCoordinator(
-      runSerialized: _serialized,
-      now: _now,
-      getInstallation: () => _installation,
-      requireInstallation: _requireInstallation,
-      isReady: () => isReady,
-      isDisposed: () => _isDisposed,
-      persistSnapshot: (at) => _persistSnapshotInternal(at: at),
-      rollbackInstallation: _rollbackInstallation,
-      saveEncodedSnapshot: _storage.saveSnapshot,
-      markPendingChanges: () => _hasPendingChanges = true,
-      clearPendingChanges: () => _hasPendingChanges = false,
-      syncCachedView: _syncCachedView,
-      notify: _notifySafely,
-    );
+    _encounter = EncounterCoordinator(_IdentityEncounterHost(this));
   }
 
   IdentityStatus get status => _status;
@@ -110,6 +98,13 @@ class IdentityController extends ChangeNotifier {
 
   /// Number of contacts in the currently selected persona's address book.
   int get contactsCount => _cachedContactsCount;
+
+  /// Unmodifiable snapshot of contacts in the selected persona's address book.
+  List<Contact> get contacts => List.unmodifiable(_cachedContacts);
+
+  /// Cached contact count for a specific [identityKey] persona.
+  int contactsCountForPersona(Uint8List identityKey) =>
+      _cachedPersonaContactCounts[_bytesToHex(identityKey)] ?? 0;
 
   /// Look up a contact record by [peerPublicKey] on the selected persona.
   Contact? getContact(Uint8List peerPublicKey) {
@@ -161,12 +156,19 @@ class IdentityController extends ChangeNotifier {
     _cachedSelectedIdentity = Uint8List.fromList(inst.selectedIdentity);
     _cachedIdentities = inst.identities.map(Uint8List.fromList).toList();
     _cachedContactsCount = inst.contactsCount();
+    _cachedContacts = inst.listContacts();
+    _cachedPersonaContactCounts = {
+      for (final id in _cachedIdentities)
+        _bytesToHex(id): inst.contactsCount(identityKey: id),
+    };
   }
 
   void _clearCachedView() {
     _cachedSelectedIdentity = null;
     _cachedIdentities = const [];
     _cachedContactsCount = 0;
+    _cachedContacts = const [];
+    _cachedPersonaContactCounts = const {};
   }
 
   void _notifySafely() {
@@ -591,6 +593,46 @@ class IdentityController extends ChangeNotifier {
     });
   }
 
+  /// Restore a previously blocked contact back to active status.
+  ///
+  /// Rejects with [CeremonyActiveException] if an encounter ceremony is active.
+  Future<void> unblockContact(Uint8List peerPublicKey) {
+    return _serialized(() async {
+      _requireInstallation();
+      _ensureNoActiveEncounter();
+      await _transactionalMutate((inst) {
+        inst.unblockContact(peerPublicKey);
+      });
+    });
+  }
+
+  /// Set or update the local alias for [peerPublicKey] on the active persona.
+  ///
+  /// Rejects with [CeremonyActiveException] if an encounter ceremony is active.
+  Future<void> setContactAlias(Uint8List peerPublicKey, String alias) {
+    return _serialized(() async {
+      _requireInstallation();
+      _ensureNoActiveEncounter();
+      await _transactionalMutate((inst) {
+        inst.setContactAlias(peerPublicKey, alias);
+      });
+    });
+  }
+
+  /// Import an unverified peer public key into the active persona's address book.
+  ///
+  /// Rejects with [CeremonyActiveException] if an encounter ceremony is active.
+  Future<Contact> importPeerKey(Uint8List peerPublicKey) {
+    return _serialized(() async {
+      _requireInstallation();
+      _ensureNoActiveEncounter();
+      return _transactionalMutate((inst) {
+        inst.importPeerKey(peerPublicKey);
+        return inst.getContact(peerPublicKey)!;
+      });
+    });
+  }
+
   /// Execute a synchronous or asynchronous [MeshInstallation] mutation under
   /// the serialization lock with atomic snapshot persistence and rollback on failure.
   ///
@@ -693,4 +735,55 @@ class IdentityController extends ChangeNotifier {
     _clearCachedView();
     super.dispose();
   }
+}
+
+class _IdentityEncounterHost implements EncounterHost {
+  final IdentityController _controller;
+
+  _IdentityEncounterHost(this._controller);
+
+  @override
+  Future<T> runSerialized<T>(Future<T> Function() action) =>
+      _controller._serialized(action);
+
+  @override
+  DateTime now() => _controller._now();
+
+  @override
+  MeshInstallation? get installation => _controller._installation;
+
+  @override
+  MeshInstallation requireInstallation() => _controller._requireInstallation();
+
+  @override
+  bool get isReady => _controller.isReady;
+
+  @override
+  bool get isDisposed => _controller._isDisposed;
+
+  @override
+  Future<void> persistSnapshot(DateTime at) =>
+      _controller._persistSnapshotInternal(at: at);
+
+  @override
+  Future<void> rollbackInstallation(
+    Uint8List prevSnapshotBytes,
+    List<Uint8List> prevKeys,
+  ) => _controller._rollbackInstallation(prevSnapshotBytes, prevKeys);
+
+  @override
+  Future<void> saveEncodedSnapshot(Uint8List encodedEnvelope) =>
+      _controller._storage.saveSnapshot(encodedEnvelope);
+
+  @override
+  void markPendingChanges() => _controller._hasPendingChanges = true;
+
+  @override
+  void clearPendingChanges() => _controller._hasPendingChanges = false;
+
+  @override
+  void syncCachedView() => _controller._syncCachedView();
+
+  @override
+  void notifyHost() => _controller._notifySafely();
 }

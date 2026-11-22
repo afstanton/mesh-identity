@@ -4,7 +4,7 @@ A cross-platform reference and demonstration application for **[`mesh_identity`]
 
 Target Platforms: **iOS**, **Android**, **macOS**, **Windows**, and **Linux** (Web excluded).
 
-> **Current Status**: Core Node, Responsive Shell, and In-Person Encounter ceremonies complete (Slices 1–3). Native integration with `mesh_identity` v0.5.0, transactional keyring + generational snapshot persistence, responsive adaptive shell, macOS HIG menu/toolbar, About screen, isolated single-device Practice Mode, and two-device QR/URI encounter verification are complete. Contact Governance & Persona Management are next (Slice 4).
+> **Current Status**: Core Node, Responsive Shell, In-Person Encounter ceremonies, and Contact Governance & Persona Management complete (Slices 1–4). Native integration with `mesh_identity` v0.5.1, transactional keyring + generational snapshot persistence, responsive adaptive shell, macOS HIG menu/toolbar, About screen, isolated single-device Practice Mode, two-device QR/URI encounter verification, contact search/alias/block/import UI, and multi-persona switching/removal are complete. Hardware Camera QR Scanning is next (Slice 5).
 
 ---
 
@@ -12,15 +12,15 @@ Target Platforms: **iOS**, **Android**, **macOS**, **Windows**, and **Linux** (W
 
 | Capability | Status | Description |
 |---|---|---|
-| **Native Integration** | **Complete** | Proven FFI bindings via `mesh_identity` v0.5.0 on pub.dev. |
+| **Native Integration** | **Complete** | Proven FFI bindings via `mesh_identity` v0.5.1 on pub.dev. |
 | **Build-Time Parameterization** | **Complete** | Confidential store IDs via gitignored xcconfig & gradle properties. |
 | **Secure Persistence** | **Complete** | Keychain/Keystore seed storage, envelope framing & generational atomic snapshots. |
 | **Responsive Shell & HIG** | **Complete** | Adaptive bottom bar / navigation rail, themes, and macOS unified toolbar + menu bar. |
 | **About Screen** | **Complete** | In-app MIT license, engine versions, and public repository link (`https://github.com/afstanton/mesh-identity`). |
 | **Practice Mode Encounter** | **Complete** | Isolated single-device Alice & Bob ceremony with 6-digit SAS verification. |
 | **Manual & QR Encounter** | **Complete** | Two-device optical QR display (`QrTransport.encodeUri`), clipboard URI import, statutory notices, timeout & rate-limit handling. |
-| **Contacts & Personas UI** | **Next** | Verified contact detail cards, alias editing, blocking, and multi-persona switching (Slice 4). |
-| **Camera QR Scanner** | **Planned** | Hardware camera barcode scanning with entitlements & fallback (Slice 5). |
+| **Contacts & Personas UI** | **Complete** | Contact search/filters, detail cards, alias editing, blocking/unblocking, unverified key import, and multi-persona switching (Slice 4). |
+| **Camera QR Scanner** | **Next** | Hardware camera barcode scanning with entitlements & fallback (Slice 5). |
 | **Device Handoff & Groups** | **Planned** | Voting role handoff, Byzantine group admission, and two-phase commit outbox (Slices 6–7). |
 | **OpenPGP & BLE** | **Planned** | OpenPGP export previews/cross-certification and offline BLE transport (Slices 8–9). |
 

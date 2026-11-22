@@ -297,10 +297,10 @@ packages:
     dependency: "direct main"
     description:
       name: mesh_identity
-      sha256: bf06e2266b9fe4081f6ecebce0e3e49a826e712fc01905d655c51c73631c2422
+      sha256: "51645fcee21e83b238b8707d1f3ff28a58cb2feaae2bf0701a683b6a1a5734de"
       url: "https://pub.dev"
     source: hosted
-    version: "0.5.0"
+    version: "0.5.1"
   meta:
     dependency: transitive
     description:

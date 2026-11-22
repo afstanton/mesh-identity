@@ -305,6 +305,41 @@ void main() {
       expect(await rawKeyring.getSeed(key2), isNull);
     });
 
+    test('removePersona rejects removing the last remaining persona', () async {
+      await controller.initialize();
+      final onlyKey = controller.selectedIdentity!;
+
+      await expectLater(
+        () => controller.removePersona(onlyKey),
+        throwsA(isA<MeshIdentityException>()),
+      );
+
+      expect(controller.isReady, isTrue);
+      expect(controller.identities, equals([onlyKey]));
+      expect(controller.selectedIdentity, equals(onlyKey));
+      expect(await rawKeyring.getSeed(onlyKey), isNotNull);
+    });
+
+    test(
+      'removePersona rejects removing the currently selected persona',
+      () async {
+        await controller.initialize();
+        final key1 = controller.selectedIdentity!;
+        final key2 = await controller.addPersona();
+
+        await expectLater(
+          () => controller.removePersona(key1),
+          throwsA(isA<MeshIdentityException>()),
+        );
+
+        expect(controller.isReady, isTrue);
+        expect(controller.identities.length, equals(2));
+        expect(controller.selectedIdentity, equals(key1));
+        expect(await rawKeyring.getSeed(key1), isNotNull);
+        expect(await rawKeyring.getSeed(key2), isNotNull);
+      },
+    );
+
     test(
       'selectPersona snapshot failure rolls back selectedIdentity',
       () async {

@@ -6,7 +6,7 @@ This roadmap breaks down the development of **Encounter** (`code/mesh-identity/e
 
 ## Architecture & Design Guardrails
 
-1. **Standalone Package Dependency**: Always depend on `mesh_identity: ^0.5.0` from pub.dev. Never use local path dependencies.
+1. **Standalone Package Dependency**: Always depend on `mesh_identity: ^0.5.1` from pub.dev. Never use local path dependencies.
 2. **Confidentiality Invariant**: All store bundle IDs, proprietary company names, signing keystores, and telemetry keys are gitignored and injected at build time. Default build uses `org.mesh.identity.encounter`.
 3. **Single-Isolate Native Handles**: Keep `MeshInstallation` and `MeshGroupHandle` inside a single dedicated service/controller on the main UI isolate.
 4. **Seed & Secret Zeroization**: All caller-managed seeds and passphrases in Dart must be securely handled and zeroed when discarded.
@@ -34,7 +34,7 @@ This roadmap breaks down the development of **Encounter** (`code/mesh-identity/e
   - Statutory UI: `proximityDisclaimer`, `notIdentityProof`, and `instruction`.
   - Human-typed 6-digit SAS comparison (no auto-confirm) and `cancelCeremony` on exit.
 
-- [ ] **Slice 4: Contact Governance & Persona Management**
+- [x] **Slice 4: Contact Governance & Persona Management**
   - Verified contact detail cards with SAS timestamps, fingerprints, and alias editing.
   - Unverified contact handling and administrative blocking.
   - Multi-persona switcher with fresh seed generation and buffer zeroization.

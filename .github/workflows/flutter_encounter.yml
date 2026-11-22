@@ -47,3 +47,8 @@ jobs:
       - name: Run tests
         working-directory: examples/flutter/encounter
         run: flutter test
+
+      - name: Build macOS (debug)
+        if: runner.os == 'macOS'
+        working-directory: examples/flutter/encounter
+        run: flutter build macos --debug

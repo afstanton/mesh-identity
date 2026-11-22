@@ -7,7 +7,7 @@ license = "MIT"
 description = "Peer identity, offline encounters, and Byzantine group admission governance."
 repository = "https://github.com/afstanton/mesh-identity"
 readme = "README.md"
-exclude = ["bindings/", "examples/", ".github/"]
+exclude = ["bindings/", "examples/", ".github/", ".cargo/"]
 
 [dependencies]
 # Cryptography

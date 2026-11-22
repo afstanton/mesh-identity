@@ -1,30 +1,71 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
+import 'dart:typed_data';
 
-import 'package:flutter_test/flutter_test.dart';
-import 'package:material_ui/material_ui.dart';
-
+import 'package:encounter/core/config.dart';
 import 'package:encounter/main.dart';
+import 'package:encounter/services/identity_controller.dart';
+import 'package:encounter/services/keyring_service.dart';
+import 'package:encounter/services/snapshot_storage.dart';
+import 'package:flutter_test/flutter_test.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
+  testWidgets('EncounterApp initializes and renders active persona status', (
+    WidgetTester tester,
+  ) async {
+    final keyring = InMemoryKeyringService();
+    final storage = InMemorySnapshotStorageService();
+    final controller = IdentityController(keyring: keyring, storage: storage);
+    addTearDown(controller.dispose);
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    await controller.initialize();
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
+    await tester.pumpWidget(EncounterApp(controller: controller));
+    await tester.pumpAndSettle();
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    expect(find.text(AppConfig.appName), findsOneWidget);
+    expect(find.text('Active Persona'), findsOneWidget);
+    expect(find.text('Personas: 1  •  Contacts: 0'), findsOneWidget);
   });
+
+  testWidgets(
+    'EncounterApp corrupted state requires confirmation dialog before reset',
+    (WidgetTester tester) async {
+      final keyring = InMemoryKeyringService();
+      final storage = InMemorySnapshotStorageService();
+      final corruptBytes = Uint8List.fromList([0x01, 0x02, 0x03, 0x04]);
+      await storage.saveSnapshot(corruptBytes);
+
+      final controller = IdentityController(keyring: keyring, storage: storage);
+      addTearDown(controller.dispose);
+
+      await controller.initialize();
+      expect(controller.status, equals(IdentityStatus.corrupted));
+
+      await tester.pumpWidget(EncounterApp(controller: controller));
+      await tester.pumpAndSettle();
+
+      expect(find.text('Identity Recovery Required'), findsOneWidget);
+      expect(find.text('Reset Identity'), findsOneWidget);
+
+      // Tap Reset Identity -> opens confirmation dialog
+      await tester.tap(find.text('Reset Identity'));
+      await tester.pumpAndSettle();
+      expect(find.text('Reset Identity?'), findsOneWidget);
+
+      // Dismissing dialog via Cancel leaves corrupted state intact
+      await tester.tap(find.text('Cancel'));
+      await tester.pumpAndSettle();
+      expect(controller.status, equals(IdentityStatus.corrupted));
+      expect(storage.archivedSnapshots, isEmpty);
+
+      // Re-open dialog and confirm reset -> archives corrupt snapshot & recovers
+      await tester.tap(find.text('Reset Identity'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Confirm Reset'));
+      await tester.pumpAndSettle();
+
+      expect(controller.status, equals(IdentityStatus.ready));
+      expect(storage.archivedSnapshots, equals([corruptBytes]));
+      expect(find.text('Active Persona'), findsOneWidget);
+    },
+  );
 }

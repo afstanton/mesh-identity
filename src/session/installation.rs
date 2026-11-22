@@ -1584,7 +1584,12 @@ mod contact_governance_tests {
 
         alice.block_contact(alice_pk, bob_pk).unwrap();
         assert_eq!(
-            alice.contacts(alice_pk).unwrap().get(&bob_pk).unwrap().status,
+            alice
+                .contacts(alice_pk)
+                .unwrap()
+                .get(&bob_pk)
+                .unwrap()
+                .status,
             ContactStatus::Blocked
         );
 
@@ -1661,7 +1666,9 @@ mod contact_governance_tests {
         let too_long = "x".repeat(MAX_ALIAS_BYTES + 1);
         assert_eq!(
             alice.set_contact_alias(alice_pk, peer_a, &too_long),
-            Err(Error::Session(SessionError::Store(StoreError::AliasTooLong)))
+            Err(Error::Session(SessionError::Store(
+                StoreError::AliasTooLong
+            )))
         );
         assert_eq!(
             alice.set_contact_alias(alice_pk, [0x77; 32], "Other"),

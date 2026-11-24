@@ -43,9 +43,9 @@ This roadmap breaks down the development of **Encounter** (`code/mesh-identity/e
   - Cross-platform camera scanner (`flutter_zxing` + `camera_desktop` behind `QrScannerService`) with graceful fallback to on-screen QR and clipboard import.
   - Camera permissions and macOS App Sandbox entitlements (`iOS`, `Android`, `macOS`, `Windows`, `Linux`).
 
-- [ ] **Slice 6: Device-to-Device Handoff & Monotonic Voting Roles**
+- [x] **Slice 6: Device-to-Device Handoff & Monotonic Voting Roles** *(implemented; two-device verification pending)*
   - Persistent device nonce display and voting role indicator (`VotingState`: voting, stopped, gated).
-  - Outbox handoff QR bundle generation and receiver handoff acceptance with atomic snapshot updates.
+  - Durable outbox handoff bundle generation and receiver handoff acceptance with atomic snapshot updates.
 
 - [ ] **Slice 7: Byzantine Group Admission & Governance UI**
   - Group formation & authenticated genesis export/import.

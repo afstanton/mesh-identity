@@ -4,7 +4,7 @@ A cross-platform reference and demonstration application for **[`mesh_identity`]
 
 Target Platforms: **iOS**, **Android**, **macOS**, **Windows**, and **Linux** (Web excluded).
 
-> **Current Status**: Core Node, Responsive Shell, In-Person Encounter ceremonies, Contact Governance & Persona Management (Slices 1–4), and Hardware Camera QR Scanning implementation (Slice 5, physical-camera device verification pending) are in place. Native integration with `mesh_identity` v0.5.1, transactional keyring + generational snapshot persistence, responsive adaptive shell, macOS HIG menu/toolbar, About screen, isolated single-device Practice Mode, two-device camera/QR/URI encounter verification (valid scanned QR URIs auto-submit into the active ceremony step while 6-digit SAS confirmation remains strictly manual), contact search/alias/block/import UI, and multi-persona switching/removal are implemented. Device-to-Device Handoff is next (Slice 6).
+> **Current Status**: Core Node, Responsive Shell, In-Person Encounter ceremonies, Contact Governance & Persona Management (Slices 1–4), Hardware Camera QR Scanning implementation (Slice 5, physical-camera device verification pending), and Device-to-Device Handoff & Monotonic Voting Roles (Slice 6, two-device verification pending) are in place. Native integration with `mesh_identity` v0.5.1, transactional keyring + generational snapshot persistence, responsive adaptive shell, macOS HIG menu/toolbar, About screen, isolated single-device Practice Mode, two-device camera/QR/URI encounter verification (valid scanned QR URIs auto-submit into the active ceremony step while 6-digit SAS confirmation remains strictly manual), contact search/alias/block/import UI, multi-persona switching/seed provisioning/removal, and durable monotonic voting-role device handoff are implemented. Byzantine Group Admission is next (Slice 7).
 
 ---
 
@@ -21,7 +21,8 @@ Target Platforms: **iOS**, **Android**, **macOS**, **Windows**, and **Linux** (W
 | **Manual & QR Encounter** | **Complete** | Two-device optical QR display (`QrTransport.encodeUri`), clipboard URI import, statutory notices, timeout & rate-limit handling. |
 | **Contacts & Personas UI** | **Complete** | Contact search/filters, detail cards, alias editing, blocking/unblocking, unverified key import, and multi-persona switching (Slice 4). |
 | **Camera QR Scanner** | **Device Check Pending** | Cross-platform camera QR scanning (`flutter_zxing` + `camera_desktop` behind `QrScannerService`) with permissions/entitlements & manual fallback; valid scanned URIs auto-submit while SAS confirmation remains manual (Slice 5). |
-| **Device Handoff & Groups** | **Next** | Voting role handoff, Byzantine group admission, and two-phase commit outbox (Slices 6–7). |
+| **Device Handoff** | **Device Check Pending** | Persistent device nonce, monotonic `VotingState` display, durable outbound bundle outbox, `Gated` persona seed import/export (with 30s clipboard auto-clear warning), and inbound inspect/accept handoff (Slice 6). |
+| **Byzantine Groups** | **Next** | Group formation, authenticated genesis, admission vouchers, and two-phase commit outbox (Slice 7). |
 | **OpenPGP & BLE** | **Planned** | OpenPGP export previews/cross-certification and offline BLE transport (Slices 8–9). |
 
 ---

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
@@ -5,7 +7,9 @@ import 'package:mesh_identity/mesh_identity.dart';
 
 import '../../core/theme.dart';
 import '../../services/encounter_session.dart';
+import '../../services/handoff_codec.dart';
 import '../../services/identity_controller.dart';
+import 'device_handoff_screen.dart';
 
 /// Slice 4: Multi-persona identity management (create, switch active persona,
 /// inspect per-persona contact counts, copy public key, and remove inactive
@@ -22,6 +26,13 @@ class IdentityView extends StatefulWidget {
 class _IdentityViewState extends State<IdentityView> {
   bool _isBusy = false;
   String? _errorMessage;
+  Timer? _clipboardClearTimer;
+
+  @override
+  void dispose() {
+    _clipboardClearTimer?.cancel();
+    super.dispose();
+  }
 
   Future<void> _addPersona() async {
     setState(() {
@@ -126,6 +137,99 @@ class _IdentityViewState extends State<IdentityView> {
     );
   }
 
+  static String _votingStateLabel(VotingState state) {
+    return switch (state) {
+      VotingState.voting => 'Voting',
+      VotingState.stopped => 'Stopped',
+      VotingState.gated => 'Gated',
+    };
+  }
+
+  void _openDeviceHandoff() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => DeviceHandoffScreen(controller: widget.controller),
+      ),
+    );
+  }
+
+  Future<void> _importPersonaSeed() async {
+    final imported = await showDialog<Uint8List>(
+      context: context,
+      builder: (_) => _ImportPersonaSeedDialog(controller: widget.controller),
+    );
+    if (!mounted || imported == null) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Imported persona ${shortHexKey(imported)}')),
+    );
+  }
+
+  Future<void> _exportPersonaSeed(Uint8List identityKey) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Copy Persona Signing Seed?'),
+        content: Text(
+          'WARNING: This copies the private 32-byte signing seed for '
+          '${shortHexKey(identityKey)} to your clipboard as plain text. Anyone '
+          'or any app with clipboard access (including OS clipboard history '
+          'or synced clipboards) gains full, permanent control of this persona, '
+          'not just its voting role. Encounter will attempt to clear the '
+          'clipboard after 30 seconds.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('confirm_export_persona_seed_button'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Copy Seed'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    Uint8List? seed;
+    try {
+      seed = await widget.controller.exportPersonaSeed(identityKey);
+      final hexSeed = formatHexKey(seed);
+      await Clipboard.setData(ClipboardData(text: hexSeed));
+      _clipboardClearTimer?.cancel();
+      _clipboardClearTimer = Timer(const Duration(seconds: 30), () async {
+        try {
+          final current = await Clipboard.getData(Clipboard.kTextPlain);
+          if (current?.text == hexSeed) {
+            await Clipboard.setData(const ClipboardData(text: ''));
+          }
+        } catch (_) {
+          // Best-effort clipboard clear.
+        }
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Copied private seed for ${shortHexKey(identityKey)}. '
+            'Clipboard will auto-clear in 30 seconds.',
+          ),
+        ),
+      );
+    } on MeshIdentityException catch (e) {
+      if (!mounted) return;
+      setState(() => _errorMessage = e.message);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _errorMessage = 'Failed to export seed: $e');
+    } finally {
+      if (seed != null) {
+        seed.fillRange(0, seed.length, 0);
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -141,32 +245,44 @@ class _IdentityViewState extends State<IdentityView> {
         child: ListView(
           padding: const EdgeInsets.all(20),
           children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Identity', style: theme.textTheme.headlineSmall),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${identities.length} '
-                        '${identities.length == 1 ? 'persona' : 'personas'} '
-                        'on this installation',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Identity', style: theme.textTheme.headlineSmall),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${identities.length} '
+                      '${identities.length == 1 ? 'persona' : 'personas'} '
+                      'on this installation',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 12),
-                FilledButton.icon(
-                  key: const Key('add_persona_button'),
-                  onPressed: actionsDisabled ? null : _addPersona,
-                  icon: const Icon(Icons.person_add_outlined),
-                  label: const Text('Add Persona'),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      key: const Key('import_persona_seed_button'),
+                      onPressed: actionsDisabled ? null : _importPersonaSeed,
+                      icon: const Icon(Icons.key_outlined),
+                      label: const Text('Import Seed'),
+                    ),
+                    FilledButton.icon(
+                      key: const Key('add_persona_button'),
+                      onPressed: actionsDisabled ? null : _addPersona,
+                      icon: const Icon(Icons.person_add_outlined),
+                      label: const Text('Add Persona'),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -220,6 +336,9 @@ class _IdentityViewState extends State<IdentityView> {
               final contactCount = widget.controller.contactsCountForPersona(
                 identity,
               );
+              final votingRecord = widget.controller.votingRecordForPersona(
+                identity,
+              );
               return Padding(
                 padding: const EdgeInsets.only(bottom: 12),
                 child: Card.outlined(
@@ -270,19 +389,34 @@ class _IdentityViewState extends State<IdentityView> {
                           ],
                         ),
                         const SizedBox(height: 8),
-                        Text(
-                          '$contactCount '
-                          '${contactCount == 1 ? 'contact' : 'contacts'}',
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
+                        Wrap(
+                          spacing: 12,
+                          runSpacing: 4,
+                          crossAxisAlignment: WrapCrossAlignment.center,
+                          children: [
+                            Text(
+                              '$contactCount '
+                              '${contactCount == 1 ? 'contact' : 'contacts'}',
+                              style: theme.textTheme.bodySmall?.copyWith(
+                                color: theme.colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                            if (votingRecord != null)
+                              Text(
+                                'Role: ${_votingStateLabel(votingRecord.state)} '
+                                '(Counter ${votingRecord.counter})',
+                                style: theme.textTheme.bodySmall?.copyWith(
+                                  color: theme.colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                          ],
                         ),
-                        if (!isSelected) ...[
-                          const SizedBox(height: 12),
-                          Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: [
+                        const SizedBox(height: 12),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: [
+                            if (!isSelected)
                               FilledButton.tonalIcon(
                                 key: Key('switch_persona_$hex'),
                                 onPressed: actionsDisabled
@@ -291,6 +425,18 @@ class _IdentityViewState extends State<IdentityView> {
                                 icon: const Icon(Icons.swap_horiz),
                                 label: const Text('Switch'),
                               ),
+                            OutlinedButton.icon(
+                              key: Key('export_persona_seed_$hex'),
+                              onPressed: actionsDisabled
+                                  ? null
+                                  : () => _exportPersonaSeed(identity),
+                              icon: const Icon(
+                                Icons.vpn_key_outlined,
+                                size: 18,
+                              ),
+                              label: const Text('Export Seed'),
+                            ),
+                            if (!isSelected)
                               TextButton.icon(
                                 key: Key('remove_persona_$hex'),
                                 onPressed: actionsDisabled
@@ -307,9 +453,8 @@ class _IdentityViewState extends State<IdentityView> {
                                   ),
                                 ),
                               ),
-                            ],
-                          ),
-                        ],
+                          ],
+                        ),
                       ],
                     ),
                   ),
@@ -324,12 +469,43 @@ class _IdentityViewState extends State<IdentityView> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
+                      'Device Handoff & Voting Role',
+                      style: theme.textTheme.titleMedium,
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      widget.controller.deviceNonce == null
+                          ? 'Device nonce: not generated yet.'
+                          : 'Device nonce: ${shortHexKey(widget.controller.deviceNonce!)}',
+                      style: AppTheme.monospaceStyle(context).copyWith(
+                        fontSize: 12,
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton.tonalIcon(
+                      key: const Key('open_device_handoff_button'),
+                      onPressed: actionsDisabled ? null : _openDeviceHandoff,
+                      icon: const Icon(Icons.devices_outlined),
+                      label: const Text('Open Device Handoff'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Card.outlined(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
                       'Upcoming Capabilities',
                       style: theme.textTheme.titleMedium,
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Slice 6: Multi-device encrypted handoff export/import.\n'
                       'Slice 8: OpenPGP public-key certificate export.',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
@@ -342,6 +518,106 @@ class _IdentityViewState extends State<IdentityView> {
           ],
         ),
       ),
+    );
+  }
+}
+
+class _ImportPersonaSeedDialog extends StatefulWidget {
+  final IdentityController controller;
+
+  const _ImportPersonaSeedDialog({required this.controller});
+
+  @override
+  State<_ImportPersonaSeedDialog> createState() =>
+      _ImportPersonaSeedDialogState();
+}
+
+class _ImportPersonaSeedDialogState extends State<_ImportPersonaSeedDialog> {
+  final TextEditingController _seedController = TextEditingController();
+  bool _isBusy = false;
+  String? _errorMessage;
+
+  @override
+  void dispose() {
+    _seedController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    setState(() {
+      _isBusy = true;
+      _errorMessage = null;
+    });
+    Uint8List? seedBytes;
+    try {
+      seedBytes = parseHexSeed(_seedController.text);
+      final key = await widget.controller.importPersonaSeed(seedBytes);
+      if (!mounted) return;
+      Navigator.of(context).pop(key);
+    } on FormatException catch (e) {
+      if (!mounted) return;
+      setState(() => _errorMessage = e.message);
+    } on MeshIdentityException catch (e) {
+      if (!mounted) return;
+      setState(() => _errorMessage = e.message);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _errorMessage = 'Failed to import seed: $e');
+    } finally {
+      if (seedBytes != null) {
+        seedBytes.fillRange(0, seedBytes.length, 0);
+      }
+      if (mounted) {
+        setState(() => _isBusy = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return AlertDialog(
+      title: const Text('Import Persona Signing Seed'),
+      content: SizedBox(
+        width: 440,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Import a 64-character hex Ed25519 signing seed from another '
+              'device to provision a shared persona. Imported personas start '
+              'in Gated state until a device handoff transfers the voting role.',
+              style: theme.textTheme.bodySmall,
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              key: const Key('import_persona_seed_field'),
+              controller: _seedController,
+              enabled: !_isBusy,
+              maxLines: 1,
+              obscureText: true,
+              style: AppTheme.monospaceStyle(context),
+              decoration: InputDecoration(
+                labelText: 'Persona Seed (64 hex chars)',
+                border: const OutlineInputBorder(),
+                errorText: _errorMessage,
+              ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+          onPressed: _isBusy ? null : () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          key: const Key('confirm_import_persona_seed_button'),
+          onPressed: _isBusy ? null : _submit,
+          child: const Text('Import'),
+        ),
+      ],
     );
   }
 }

@@ -1127,6 +1127,9 @@ class IdentityController extends ChangeNotifier {
     return _serialized(() async {
       final handle = _requireGroupHandle();
       _ensureNoActiveEncounter();
+      if (_beforePersistHook != null) {
+        await _beforePersistHook!();
+      }
       final prevKeys = handle.installation.identities;
       final prevBlob = handle.save(at: at).blob;
 
@@ -1180,6 +1183,185 @@ class IdentityController extends ChangeNotifier {
       final saved = handle.save(at: at);
       handle.confirmSaved(saved.token);
       return handle.takeOutgoing();
+    });
+  }
+
+  /// Parse and inspect an unauthenticated OpenPGP certificate.
+  OpenPgpCertificate inspectOpenPgpCertificate(Uint8List bytes) =>
+      OpenPgpCertificate.fromBytes(bytes);
+
+  /// Create an [OpenPgpExportPreview] for the currently selected persona.
+  ///
+  /// Rejects with [CeremonyActiveException] if an encounter ceremony is active.
+  Future<OpenPgpExportPreview> createOpenPgpPreview({
+    required OpenPgpProfile profile,
+    required String userId,
+    required Uint8List document,
+    Uint8List? peerCertificate,
+    String? peerUserId,
+  }) {
+    return _serialized(() async {
+      final inst = _requireInstallation();
+      _ensureNoActiveEncounter();
+      return inst.createOpenPgpPreview(
+        profile: profile,
+        userId: userId,
+        document: document,
+        peerCertificate: peerCertificate,
+        peerUserId: peerUserId,
+        at: _now(),
+      );
+    });
+  }
+
+  /// Confirm an [OpenPgpExportPreview] on the currently selected persona and
+  /// issue transferable OpenPGP artifacts.
+  ///
+  /// Rejects with [CeremonyActiveException] if an encounter ceremony is active.
+  Future<OpenPgpArtifacts> confirmOpenPgpPreview(OpenPgpExportPreview preview) {
+    return _serialized(() async {
+      final inst = _requireInstallation();
+      _ensureNoActiveEncounter();
+      return preview.confirm(inst);
+    });
+  }
+
+  /// Import an unverified OpenPGP peer certificate bound to [expectedPublicKey]
+  /// and [userId], persisting the updated contact list atomically.
+  ///
+  /// Any verified revocations recorded natively before a rejection are
+  /// preserved durably rather than rolled back.
+  /// Rejects with [CeremonyActiveException] if an encounter ceremony is active.
+  Future<OpenPgpProvenance> importOpenPgpPeer({
+    required Uint8List certificate,
+    required Uint8List expectedPublicKey,
+    required String userId,
+  }) {
+    return _serialized(() async {
+      final handle = _requireGroupHandle();
+      final inst = handle.installation;
+      _ensureNoActiveEncounter();
+
+      final now = _now();
+      final prevKeys = inst.identities;
+      final prevSnapshotBytes = handle.save(at: now).blob;
+
+      final OpenPgpProvenance provenance;
+      try {
+        provenance = inst.importOpenPgpPeer(
+          certificate: certificate,
+          expectedPublicKey: expectedPublicKey,
+          userId: userId,
+          at: now,
+        );
+      } on MeshIdentityException {
+        // Native import records verified revocations before checking the
+        // target key/User ID; persist those revocations even on rejection.
+        try {
+          await _persistSnapshotInternal(at: _now());
+        } catch (_) {
+          // Best-effort revocation persistence before rethrowing original error.
+        }
+        if (!_isDisposed) {
+          _syncCachedView();
+          _notifySafely();
+        }
+        rethrow;
+      }
+
+      try {
+        await _persistSnapshotInternal(at: _now());
+      } catch (_) {
+        await _rollbackInstallation(prevSnapshotBytes, prevKeys);
+        rethrow;
+      }
+
+      if (!_isDisposed) {
+        _syncCachedView();
+        _notifySafely();
+      }
+      return provenance;
+    });
+  }
+
+  /// Import an owned OpenPGP secret key certificate for a new persona not
+  /// already in this installation, storing the extracted 32-byte signing seed
+  /// directly in [_keyring] and persisting the updated snapshot atomically.
+  ///
+  /// Any verified revocations recorded natively before a rejection are
+  /// preserved durably; persistence failures remove any newly saved seed and
+  /// roll back. The temporary seed buffer is always zeroized in `finally`.
+  /// Rejects with [CeremonyActiveException] if an encounter ceremony is active.
+  Future<OpenPgpProvenance> importOpenPgpOwned({
+    required Uint8List secretKeyCertificate,
+    required Uint8List expectedPublicKey,
+    required String userId,
+    String? passphrase,
+  }) {
+    return _serialized(() async {
+      final handle = _requireGroupHandle();
+      final inst = handle.installation;
+      _ensureNoActiveEncounter();
+
+      final now = _now();
+      final prevKeys = inst.identities;
+      final prevSnapshotBytes = handle.save(at: now).blob;
+
+      OpenPgpOwnedImportResult? result;
+      var seedSaved = false;
+      try {
+        result = inst.importOpenPgpOwned(
+          secretKeyCertificate: secretKeyCertificate,
+          expectedPublicKey: expectedPublicKey,
+          userId: userId,
+          passphrase: passphrase,
+          at: now,
+        );
+        await _keyring.saveSeed(expectedPublicKey, result.seed);
+        seedSaved = true;
+        await _persistSnapshotInternal(at: _now());
+        if (!_isDisposed) {
+          _syncCachedView();
+          _notifySafely();
+        }
+        return result.provenance;
+      } on MeshIdentityException {
+        try {
+          await _persistSnapshotInternal(at: _now());
+        } catch (_) {
+          // Best-effort revocation persistence before rethrowing original error.
+        }
+        if (!_isDisposed) {
+          _syncCachedView();
+          _notifySafely();
+        }
+        rethrow;
+      } catch (_) {
+        if (seedSaved) {
+          try {
+            await _keyring.removeSeed(expectedPublicKey);
+          } catch (_) {
+            // Best-effort cleanup; durable envelope excludes uncommitted key.
+          }
+        }
+        await _rollbackInstallation(prevSnapshotBytes, prevKeys);
+        rethrow;
+      } finally {
+        result?.seed.fillRange(0, result.seed.length, 0);
+      }
+    });
+  }
+
+  /// Store peer OpenPGP revocation certificates and persist atomically.
+  ///
+  /// Rejects with [CeremonyActiveException] if an encounter ceremony is active.
+  Future<void> rememberOpenPgpRevocations(Uint8List revocationBytes) {
+    return _serialized(() async {
+      _requireInstallation();
+      _ensureNoActiveEncounter();
+      await _transactionalMutate(
+        (inst) => inst.rememberOpenPgpRevocations(revocationBytes),
+      );
     });
   }
 

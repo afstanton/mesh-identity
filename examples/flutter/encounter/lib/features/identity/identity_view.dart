@@ -10,6 +10,7 @@ import '../../services/encounter_session.dart';
 import '../../services/handoff_codec.dart';
 import '../../services/identity_controller.dart';
 import 'device_handoff_screen.dart';
+import 'openpgp_bridge_screen.dart';
 
 /// Slice 4: Multi-persona identity management (create, switch active persona,
 /// inspect per-persona contact counts, copy public key, and remove inactive
@@ -149,6 +150,14 @@ class _IdentityViewState extends State<IdentityView> {
     Navigator.of(context).push(
       MaterialPageRoute<void>(
         builder: (_) => DeviceHandoffScreen(controller: widget.controller),
+      ),
+    );
+  }
+
+  void _openOpenPgpBridge() {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => OpenPgpBridgeScreen(controller: widget.controller),
       ),
     );
   }
@@ -501,15 +510,24 @@ class _IdentityViewState extends State<IdentityView> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Upcoming Capabilities',
+                      'OpenPGP Interoperability',
                       style: theme.textTheme.titleMedium,
                     ),
                     const SizedBox(height: 8),
                     Text(
-                      'Slice 8: OpenPGP public-key certificate export.',
+                      'Inspect certificates, preview & export v4/v6 OpenPGP '
+                      'public keys with cross-certification, and import peer '
+                      'or owned OpenPGP keys.',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: theme.colorScheme.onSurfaceVariant,
                       ),
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton.tonalIcon(
+                      key: const Key('open_openpgp_bridge_button'),
+                      onPressed: actionsDisabled ? null : _openOpenPgpBridge,
+                      icon: const Icon(Icons.vpn_key_outlined),
+                      label: const Text('Open OpenPGP Bridge'),
                     ),
                   ],
                 ),

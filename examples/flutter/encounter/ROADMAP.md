@@ -52,7 +52,7 @@ This roadmap breaks down the development of **Encounter** (`code/mesh-identity/e
   - Verified contact admission vouchers (`invite`, `acceptAuthenticated`).
   - Two-phase commit outbox staging & confirmation (`save(now)` $\to$ `confirmSaved(token)`).
 
-- [ ] **Slice 8: OpenPGP Interoperability Bridge & Cross-Certification**
+- [x] **Slice 8: OpenPGP Interoperability Bridge & Cross-Certification** *(implemented; device verification pending)*
   - Certificate inspection (v4 and v6 public keys, algorithms, user IDs).
   - Export preview screen with statutory privacy disclosure warnings.
   - Peer cross-certification signature generation and secret key import with seed recovery.

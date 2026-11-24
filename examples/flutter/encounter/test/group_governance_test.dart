@@ -583,6 +583,77 @@ void main() {
     expect(groupCtrl.outgoingMessages.length, 1);
   });
 
+  test('two successive group ops after outbox failure flush or abort without erasing first frame', () async {
+    final clock = _FakeClock();
+    final keyring = InMemoryKeyringService();
+    final storage = InMemorySnapshotStorageService();
+    final handoffOutbox = InMemoryHandoffOutboxService();
+    final outbox = _ControllableOutbox();
+
+    final idCtrl = IdentityController(
+      keyring: keyring,
+      storage: storage,
+      handoffOutbox: handoffOutbox,
+      clock: clock.call,
+    );
+    await idCtrl.initialize();
+
+    final groupCtrl = GroupController(
+      identityController: idCtrl,
+      outbox: outbox,
+      clock: clock.call,
+    );
+    await groupCtrl.initialize();
+
+    // First group op fails outbox append -> frame retained in memory, recovery
+    // copy still on disk.
+    outbox.failNextAppend = true;
+    await groupCtrl.createGroup();
+    expect(groupCtrl.groups.length, 1);
+    expect(groupCtrl.hasUnsavedOutgoing, isTrue);
+
+    // Case A: persistent outbox failure -> second group op aborts BEFORE
+    // overwriting the recovery snapshot.
+    outbox.failNextAppend = true;
+    await expectLater(groupCtrl.createGroup(), throwsStateError);
+    expect(groupCtrl.groups.length, 1);
+    expect(groupCtrl.hasUnsavedOutgoing, isTrue);
+
+    // Case B: outbox healthy -> second group op flushes the first op's
+    // unsaved frame before committing the second op.
+    await groupCtrl.createGroup();
+    expect(groupCtrl.groups.length, 2);
+    expect(groupCtrl.hasUnsavedOutgoing, isFalse);
+    expect(groupCtrl.outgoingMessages.length, 2);
+
+    // Cold restart retains BOTH groups and BOTH persisted frames.
+    groupCtrl.dispose();
+    idCtrl.dispose();
+
+    final restartedId = IdentityController(
+      keyring: keyring,
+      storage: storage,
+      handoffOutbox: handoffOutbox,
+      clock: clock.call,
+    );
+    await restartedId.initialize();
+    final restartedGroups = GroupController(
+      identityController: restartedId,
+      outbox: outbox,
+      clock: clock.call,
+    );
+    addTearDown(restartedGroups.dispose);
+    addTearDown(restartedId.dispose);
+    await restartedGroups.initialize();
+
+    expect(restartedGroups.groups.length, 2);
+    expect(restartedGroups.outgoingMessages.length, 2);
+    expect(
+      restartedGroups.outgoingMessages.every((m) => m.isPersisted),
+      isTrue,
+    );
+  });
+
   testWidgets(
     'GroupsView requires out-of-band genesis digest, supports outbox retry, invite, accept, and leave',
     (tester) async {

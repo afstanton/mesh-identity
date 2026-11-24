@@ -15,7 +15,7 @@ abstract final class AppConfig {
   static const String appVersion = '1.0.0+1';
 
   /// Version of the `mesh_identity` Dart binding package on pub.dev.
-  static const String meshIdentityBindingVersion = '0.5.2';
+  static const String meshIdentityBindingVersion = '0.5.3';
 
   /// Version of the underlying `mesh-identity` Rust crate on crates.io.
   static const String meshIdentityCoreVersion = '0.2.1';

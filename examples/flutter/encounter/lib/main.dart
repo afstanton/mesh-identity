@@ -6,11 +6,13 @@ import 'core/config.dart';
 import 'core/theme.dart';
 import 'features/about/about_view.dart';
 import 'features/contacts/contacts_view.dart';
+import 'features/encounter/camera_qr_scanner_screen.dart';
 import 'features/identity/identity_view.dart';
 import 'features/overview/encounter_home_view.dart';
 import 'features/placeholders/slice_placeholder_view.dart';
 import 'services/identity_controller.dart';
 import 'services/link_launcher.dart';
+import 'services/qr_scanner_service.dart';
 import 'shell/adaptive_shell.dart';
 import 'shell/app_destination.dart';
 import 'shell/macos_menu_bar.dart';
@@ -33,6 +35,9 @@ class EncounterApp extends StatefulWidget {
   /// Optional injected external link launcher (primarily for testing).
   final LinkLauncher? linkLauncher;
 
+  /// Optional injected QR scanner service (primarily for testing).
+  final QrScannerService? qrScanner;
+
   /// Initial shell destination when ready.
   final AppDestination initialDestination;
 
@@ -41,6 +46,7 @@ class EncounterApp extends StatefulWidget {
     this.controller,
     this.themeController,
     this.linkLauncher,
+    this.qrScanner,
     this.initialDestination = AppDestination.encounter,
   });
 
@@ -150,7 +156,10 @@ class _EncounterAppState extends State<EncounterApp> {
 
   Widget _buildDestinationBody() {
     return switch (_selectedDestination) {
-      AppDestination.encounter => EncounterHomeView(controller: _controller),
+      AppDestination.encounter => EncounterHomeView(
+        controller: _controller,
+        qrScanner: widget.qrScanner ?? const ZxingQrScannerService(),
+      ),
       AppDestination.contacts => ContactsView(controller: _controller),
       AppDestination.groups => const GroupsPlaceholderView(),
       AppDestination.identity => IdentityView(controller: _controller),

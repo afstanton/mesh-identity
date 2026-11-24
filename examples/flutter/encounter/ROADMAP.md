@@ -39,9 +39,9 @@ This roadmap breaks down the development of **Encounter** (`code/mesh-identity/e
   - Unverified contact handling and administrative blocking.
   - Multi-persona switcher with fresh seed generation and buffer zeroization.
 
-- [ ] **Slice 5: Hardware Camera Scanning & Platform Entitlements**
-  - Cross-platform camera scanner with graceful fallback to on-screen QR and clipboard import.
-  - Camera permissions and macOS App Sandbox entitlements.
+- [x] **Slice 5: Hardware Camera Scanning & Platform Entitlements** *(implemented; physical-camera device verification pending)*
+  - Cross-platform camera scanner (`flutter_zxing` + `camera_desktop` behind `QrScannerService`) with graceful fallback to on-screen QR and clipboard import.
+  - Camera permissions and macOS App Sandbox entitlements (`iOS`, `Android`, `macOS`, `Windows`, `Linux`).
 
 - [ ] **Slice 6: Device-to-Device Handoff & Monotonic Voting Roles**
   - Persistent device nonce display and voting role indicator (`VotingState`: voting, stopped, gated).

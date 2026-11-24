@@ -4,6 +4,8 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../services/encounter_session.dart';
 import '../../services/identity_controller.dart';
+import '../../services/qr_scanner_service.dart';
+import 'camera_qr_scanner_screen.dart';
 import 'widgets/encounter_payload_input.dart';
 import 'widgets/encounter_qr_view.dart';
 import 'widgets/sas_confirmation_panel.dart';
@@ -14,11 +16,13 @@ import 'widgets/statutory_notices.dart';
 class TwoDeviceEncounterScreen extends StatefulWidget {
   final IdentityController controller;
   final EncounterRole initialRole;
+  final QrScannerService qrScanner;
 
   const TwoDeviceEncounterScreen({
     super.key,
     required this.controller,
     required this.initialRole,
+    this.qrScanner = const ZxingQrScannerService(),
   });
 
   @override
@@ -218,6 +222,12 @@ class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen> {
               submitLabel: 'Verify Response & Continue',
               inlineError: session.inlineError,
               enabled: !session.isBusy,
+              qrScanner: widget.qrScanner,
+              scanTitle: 'Scan Response QR (QR 2)',
+              scanInstruction:
+                  'Point your camera at your peer\'s Step 2 Response QR code.',
+              sessionListenable: widget.controller,
+              isSessionActive: () => widget.controller.hasActiveEncounter,
               textFieldKey: const Key('encounter_response_field'),
               pasteButtonKey: const Key('encounter_paste_button'),
               submitButtonKey: const Key('encounter_submit_button'),
@@ -246,6 +256,12 @@ class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen> {
               submitLabel: 'Accept Offer & Create Response',
               inlineError: session.inlineError,
               enabled: !session.isBusy,
+              qrScanner: widget.qrScanner,
+              scanTitle: 'Scan Offer QR (QR 1)',
+              scanInstruction:
+                  'Point your camera at your peer\'s Step 1 Offer QR code.',
+              sessionListenable: widget.controller,
+              isSessionActive: () => widget.controller.hasActiveEncounter,
               textFieldKey: const Key('encounter_offer_field'),
               pasteButtonKey: const Key('encounter_paste_button'),
               submitButtonKey: const Key('encounter_submit_button'),
@@ -284,6 +300,12 @@ class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen> {
               submitLabel: 'Complete Exchange & Show Code',
               inlineError: session.inlineError,
               enabled: !session.isBusy,
+              qrScanner: widget.qrScanner,
+              scanTitle: 'Scan Reveal QR (QR 3)',
+              scanInstruction:
+                  'Point your camera at your peer\'s Step 3 Reveal QR code.',
+              sessionListenable: widget.controller,
+              isSessionActive: () => widget.controller.hasActiveEncounter,
               textFieldKey: const Key('encounter_reveal_field'),
               pasteButtonKey: const Key('encounter_paste_button'),
               submitButtonKey: const Key('encounter_submit_button'),

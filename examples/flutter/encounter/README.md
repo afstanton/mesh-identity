@@ -4,7 +4,7 @@ A cross-platform reference and demonstration application for **[`mesh_identity`]
 
 Target Platforms: **iOS**, **Android**, **macOS**, **Windows**, and **Linux** (Web excluded).
 
-> **Current Status**: Core Node, Responsive Shell, In-Person Encounter ceremonies, and Contact Governance & Persona Management complete (Slices 1–4). Native integration with `mesh_identity` v0.5.1, transactional keyring + generational snapshot persistence, responsive adaptive shell, macOS HIG menu/toolbar, About screen, isolated single-device Practice Mode, two-device QR/URI encounter verification, contact search/alias/block/import UI, and multi-persona switching/removal are complete. Hardware Camera QR Scanning is next (Slice 5).
+> **Current Status**: Core Node, Responsive Shell, In-Person Encounter ceremonies, Contact Governance & Persona Management (Slices 1–4), and Hardware Camera QR Scanning implementation (Slice 5, physical-camera device verification pending) are in place. Native integration with `mesh_identity` v0.5.1, transactional keyring + generational snapshot persistence, responsive adaptive shell, macOS HIG menu/toolbar, About screen, isolated single-device Practice Mode, two-device camera/QR/URI encounter verification (valid scanned QR URIs auto-submit into the active ceremony step while 6-digit SAS confirmation remains strictly manual), contact search/alias/block/import UI, and multi-persona switching/removal are implemented. Device-to-Device Handoff is next (Slice 6).
 
 ---
 
@@ -20,8 +20,8 @@ Target Platforms: **iOS**, **Android**, **macOS**, **Windows**, and **Linux** (W
 | **Practice Mode Encounter** | **Complete** | Isolated single-device Alice & Bob ceremony with 6-digit SAS verification. |
 | **Manual & QR Encounter** | **Complete** | Two-device optical QR display (`QrTransport.encodeUri`), clipboard URI import, statutory notices, timeout & rate-limit handling. |
 | **Contacts & Personas UI** | **Complete** | Contact search/filters, detail cards, alias editing, blocking/unblocking, unverified key import, and multi-persona switching (Slice 4). |
-| **Camera QR Scanner** | **Next** | Hardware camera barcode scanning with entitlements & fallback (Slice 5). |
-| **Device Handoff & Groups** | **Planned** | Voting role handoff, Byzantine group admission, and two-phase commit outbox (Slices 6–7). |
+| **Camera QR Scanner** | **Device Check Pending** | Cross-platform camera QR scanning (`flutter_zxing` + `camera_desktop` behind `QrScannerService`) with permissions/entitlements & manual fallback; valid scanned URIs auto-submit while SAS confirmation remains manual (Slice 5). |
+| **Device Handoff & Groups** | **Next** | Voting role handoff, Byzantine group admission, and two-phase commit outbox (Slices 6–7). |
 | **OpenPGP & BLE** | **Planned** | OpenPGP export previews/cross-certification and offline BLE transport (Slices 8–9). |
 
 ---
@@ -37,6 +37,8 @@ flutter pub get
 # Run on your connected device or desktop
 flutter run -d macos    # or ios, android, windows, linux
 ```
+
+> **Linux desktop prerequisite:** `camera_desktop` requires GStreamer development packages (`sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-good`) and `libsecret-1-dev` for `flutter_secure_storage`.
 
 By default, the application builds with public open-source placeholders:
 - **Application ID / Bundle ID**: `org.mesh.identity.encounter`

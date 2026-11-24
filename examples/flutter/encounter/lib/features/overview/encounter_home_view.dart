@@ -6,6 +6,8 @@ import 'package:material_ui/material_ui.dart';
 import '../../core/theme.dart';
 import '../../services/encounter_session.dart';
 import '../../services/identity_controller.dart';
+import '../../services/qr_scanner_service.dart';
+import '../encounter/camera_qr_scanner_screen.dart';
 import '../encounter/practice_encounter_screen.dart';
 import '../encounter/two_device_encounter_screen.dart';
 import '../encounter/widgets/statutory_notices.dart';
@@ -14,8 +16,13 @@ import '../encounter/widgets/statutory_notices.dart';
 /// and launch actions for two-device encounters and single-device Practice Mode.
 class EncounterHomeView extends StatefulWidget {
   final IdentityController controller;
+  final QrScannerService qrScanner;
 
-  const EncounterHomeView({super.key, required this.controller});
+  const EncounterHomeView({
+    super.key,
+    required this.controller,
+    this.qrScanner = const ZxingQrScannerService(),
+  });
 
   @override
   State<EncounterHomeView> createState() => _EncounterHomeViewState();
@@ -85,6 +92,7 @@ class _EncounterHomeViewState extends State<EncounterHomeView> {
         builder: (_) => TwoDeviceEncounterScreen(
           controller: widget.controller,
           initialRole: role,
+          qrScanner: widget.qrScanner,
         ),
       ),
     );

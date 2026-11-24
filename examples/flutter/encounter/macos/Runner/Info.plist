@@ -30,5 +30,7 @@
 	<string>MainMenu</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Encounter uses the camera to scan in-person peer QR codes during offline key verification.</string>
 </dict>
 </plist>

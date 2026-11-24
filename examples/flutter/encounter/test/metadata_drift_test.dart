@@ -3,10 +3,13 @@ import 'dart:io';
 import 'package:encounter/core/config.dart';
 import 'package:flutter_test/flutter_test.dart';
 
+String _readNormalized(String path) =>
+    File(path).readAsStringSync().replaceAll('\r\n', '\n');
+
 void main() {
   group('AppConfig metadata drift checks', () {
     test('appVersion matches pubspec.yaml version', () {
-      final pubspec = File('pubspec.yaml').readAsStringSync();
+      final pubspec = _readNormalized('pubspec.yaml');
       final match = RegExp(
         r'^version:\s*(.+)$',
         multiLine: true,
@@ -18,7 +21,7 @@ void main() {
     test(
       'meshIdentityBindingVersion matches pubspec.lock resolved version',
       () {
-        final lockfile = File('pubspec.lock').readAsStringSync();
+        final lockfile = _readNormalized('pubspec.lock');
         final match = RegExp(
           r'mesh_identity:\s*\n(?:[ \t]+.*\n)*?[ \t]+version:\s*"([^"]+)"',
         ).firstMatch(lockfile);
@@ -31,8 +34,11 @@ void main() {
     );
 
     test('mitLicenseText and copyrightNotice match LICENSE file', () {
-      final licenseFile = File('LICENSE').readAsStringSync().trim();
-      expect(AppConfig.mitLicenseText.trim(), equals(licenseFile));
+      final licenseFile = _readNormalized('LICENSE').trim();
+      expect(
+        AppConfig.mitLicenseText.replaceAll('\r\n', '\n').trim(),
+        equals(licenseFile),
+      );
       expect(AppConfig.mitLicenseText, contains(AppConfig.copyrightNotice));
     });
 
@@ -41,7 +47,7 @@ void main() {
       if (!cargoToml.existsSync()) {
         return;
       }
-      final content = cargoToml.readAsStringSync();
+      final content = _readNormalized('../../../Cargo.toml');
       final match = RegExp(
         r'^version\s*=\s*"([^"]+)"',
         multiLine: true,

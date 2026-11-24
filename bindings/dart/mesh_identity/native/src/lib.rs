@@ -1190,7 +1190,10 @@ pub unsafe extern "C" fn mesh_installation_set_contact_alias(
             }
         };
 
-        match handle.installation_mut().set_contact_alias(id, peer, alias_str) {
+        match handle
+            .installation_mut()
+            .set_contact_alias(id, peer, alias_str)
+        {
             Ok(()) => MESH_OK,
             Err(e) => {
                 set_last_error(e.to_string());
@@ -1251,7 +1254,10 @@ pub unsafe extern "C" fn mesh_installation_import_peer_key(
         let mut peer = [0u8; 32];
         peer.copy_from_slice(unsafe { slice::from_raw_parts(peer_pk, 32) });
 
-        match handle.installation_mut().import_peer_key(local, peer, &mut OsRng) {
+        match handle
+            .installation_mut()
+            .import_peer_key(local, peer, &mut OsRng)
+        {
             Ok(_) => MESH_OK,
             Err(e) => {
                 set_last_error(e.to_string());
@@ -1628,7 +1634,10 @@ pub unsafe extern "C" fn mesh_installation_comparison(
         }
         let ceremony = unsafe { &mut *ceremony };
 
-        match handle.installation_mut().comparison(&ceremony.ceremony, now) {
+        match handle
+            .installation_mut()
+            .comparison(&ceremony.ceremony, now)
+        {
             Ok(Some(comp)) => {
                 unsafe {
                     *out_code = comp.code;
@@ -2203,7 +2212,10 @@ pub unsafe extern "C" fn mesh_installation_begin_handoff(
             return MESH_ERR_INVALID_SNAPSHOT;
         }
 
-        match handle.installation_mut().begin_handoff(recipient, |_, _| Ok(())) {
+        match handle
+            .installation_mut()
+            .begin_handoff(recipient, |_, _| Ok(()))
+        {
             Ok(bundle) => {
                 let snapshot = match handle.installation_mut().save_bytes(now) {
                     Ok(bytes) => bytes,
@@ -2298,7 +2310,10 @@ pub unsafe extern "C" fn mesh_installation_accept_handoff(
             return MESH_ERR_INVALID_SNAPSHOT;
         }
 
-        match handle.installation_mut().accept_handoff(&bundle, |_| Ok(())) {
+        match handle
+            .installation_mut()
+            .accept_handoff(&bundle, |_| Ok(()))
+        {
             Ok(state) => {
                 let snapshot = match handle.installation_mut().save_bytes(now) {
                     Ok(bytes) => bytes,
@@ -4560,8 +4575,10 @@ pub unsafe extern "C" fn mesh_installation_openpgp_remember_revocations(
         }
 
         let rev_bytes = unsafe { slice::from_raw_parts(rev_ptr, rev_len) };
-        match mesh_identity::openpgp::remember_peer_revocations(handle.installation_mut(), rev_bytes)
-        {
+        match mesh_identity::openpgp::remember_peer_revocations(
+            handle.installation_mut(),
+            rev_bytes,
+        ) {
             Ok(_) => MESH_OK,
             Err(e) => {
                 set_last_error(format!("{e}"));

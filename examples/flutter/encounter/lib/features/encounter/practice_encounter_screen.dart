@@ -23,32 +23,75 @@ class PracticeEncounterScreen extends StatefulWidget {
 class _PracticeEncounterScreenState extends State<PracticeEncounterScreen> {
   late PracticeEncounterController _controller;
   late bool _ownsController;
+  final ScrollController _scrollController = ScrollController();
+  late PracticeStep _lastStep;
+  late PracticePartyOutcome _lastAliceOutcome;
+  bool _mobileComparingAlice = true;
 
   @override
   void initState() {
     super.initState();
     _ownsController = widget.controller == null;
     _controller = widget.controller ?? PracticeEncounterController();
+    _lastStep = _controller.step;
+    _lastAliceOutcome = _controller.aliceOutcome;
+    _controller.addListener(_onControllerChanged);
   }
 
   @override
   void didUpdateWidget(covariant PracticeEncounterScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.controller != oldWidget.controller) {
+      _controller.removeListener(_onControllerChanged);
       if (_ownsController) {
         _controller.dispose();
       }
       _ownsController = widget.controller == null;
       _controller = widget.controller ?? PracticeEncounterController();
+      _lastStep = _controller.step;
+      _lastAliceOutcome = _controller.aliceOutcome;
+      _mobileComparingAlice = true;
+      _controller.addListener(_onControllerChanged);
     }
   }
 
   @override
   void dispose() {
+    _controller.removeListener(_onControllerChanged);
+    _scrollController.dispose();
     if (_ownsController) {
       _controller.dispose();
     }
     super.dispose();
+  }
+
+  void _scrollToTop() {
+    if (_scrollController.hasClients) {
+      _scrollController.jumpTo(0);
+    }
+  }
+
+  void _onControllerChanged() {
+    final stepChanged = _controller.step != _lastStep;
+    final aliceJustFinished =
+        _controller.step == PracticeStep.comparing &&
+        _lastAliceOutcome == PracticePartyOutcome.pending &&
+        _controller.aliceOutcome != PracticePartyOutcome.pending;
+
+    _lastStep = _controller.step;
+    _lastAliceOutcome = _controller.aliceOutcome;
+
+    if (stepChanged) {
+      _mobileComparingAlice = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scrollToTop();
+      });
+    } else if (aliceJustFinished && _mobileComparingAlice) {
+      setState(() => _mobileComparingAlice = false);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scrollToTop();
+      });
+    }
   }
 
   String _stepSummaryText(PracticeStep step) => switch (step) {
@@ -81,82 +124,125 @@ class _PracticeEncounterScreenState extends State<PracticeEncounterScreen> {
           listenable: _controller,
           builder: (context, _) {
             final colorScheme = Theme.of(context).colorScheme;
-            return SingleChildScrollView(
-              padding: const EdgeInsets.all(20),
-              child: Center(
-                child: ConstrainedBox(
-                  constraints: const BoxConstraints(maxWidth: 960),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(14),
-                        decoration: BoxDecoration(
-                          color: colorScheme.secondaryContainer,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Row(
-                          children: [
-                            Icon(
-                              Icons.science_outlined,
-                              color: colorScheme.onSecondaryContainer,
+            return Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 960),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 0),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: colorScheme.secondaryContainer,
+                              borderRadius: BorderRadius.circular(12),
                             ),
-                            const SizedBox(width: 10),
-                            Expanded(
+                            child: Row(
+                              children: [
+                                Icon(
+                                  Icons.science_outlined,
+                                  color: colorScheme.onSecondaryContainer,
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    'Practice Mode — Uses temporary in-memory keys. '
+                                    'Nothing is saved to your device.',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .bodyMedium
+                                        ?.copyWith(
+                                          color:
+                                              colorScheme.onSecondaryContainer,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Card(
+                            key: const Key('practice_step_banner'),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 12,
+                              ),
                               child: Text(
-                                'Practice Mode — Uses temporary in-memory keys. '
-                                'Nothing is saved to your device.',
-                                style: Theme.of(context).textTheme.bodyMedium
-                                    ?.copyWith(
-                                      color: colorScheme.onSecondaryContainer,
-                                      fontWeight: FontWeight.w500,
-                                    ),
+                                _stepSummaryText(_controller.step),
+                                style: Theme.of(context).textTheme.titleSmall,
                               ),
                             ),
-                          ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        controller: _scrollController,
+                        padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
+                        child: LayoutBuilder(
+                          builder: (context, constraints) {
+                            final sideBySide = constraints.maxWidth >= 840;
+                            final alicePane = _buildAlicePane(context);
+                            final bobPane = _buildBobPane(context);
+                            if (sideBySide) {
+                              return Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(child: alicePane),
+                                  const SizedBox(width: 16),
+                                  Expanded(child: bobPane),
+                                ],
+                              );
+                            }
+                            return switch (_controller.step) {
+                              PracticeStep.offerReady ||
+                              PracticeStep.revealReady => alicePane,
+                              PracticeStep.responseReady => bobPane,
+                              PracticeStep.comparing => Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  SegmentedButton<bool>(
+                                    key: const Key('practice_party_selector'),
+                                    segments: const [
+                                      ButtonSegment<bool>(
+                                        value: true,
+                                        label: Text('Alice'),
+                                        icon: Icon(Icons.person_outline),
+                                      ),
+                                      ButtonSegment<bool>(
+                                        value: false,
+                                        label: Text('Bob'),
+                                        icon: Icon(
+                                          Icons.person_pin_circle_outlined,
+                                        ),
+                                      ),
+                                    ],
+                                    selected: {_mobileComparingAlice},
+                                    onSelectionChanged: (selection) {
+                                      setState(
+                                        () => _mobileComparingAlice =
+                                            selection.first,
+                                      );
+                                      _scrollToTop();
+                                    },
+                                  ),
+                                  const SizedBox(height: 16),
+                                  _mobileComparingAlice ? alicePane : bobPane,
+                                ],
+                              ),
+                            };
+                          },
                         ),
                       ),
-                      const SizedBox(height: 12),
-                      Card(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 12,
-                          ),
-                          child: Text(
-                            _stepSummaryText(_controller.step),
-                            style: Theme.of(context).textTheme.titleSmall,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      LayoutBuilder(
-                        builder: (context, constraints) {
-                          final sideBySide = constraints.maxWidth >= 840;
-                          final alicePane = _buildAlicePane(context);
-                          final bobPane = _buildBobPane(context);
-                          if (sideBySide) {
-                            return Row(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Expanded(child: alicePane),
-                                const SizedBox(width: 16),
-                                Expanded(child: bobPane),
-                              ],
-                            );
-                          }
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              alicePane,
-                              const SizedBox(height: 16),
-                              bobPane,
-                            ],
-                          );
-                        },
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
               ),
             );
@@ -222,6 +308,7 @@ class _PracticeEncounterScreenState extends State<PracticeEncounterScreen> {
             PracticePartyOutcome.pending => SasConfirmationPanel(
               key: ValueKey('alice_sas_$aliceFingerprint'),
               title: 'Alice: Verify Bob\'s 6-Digit Code',
+              codeLabel: 'Alice\'s 6-digit code:',
               comparison: _controller.aliceComparison!,
               inlineError: _controller.aliceError,
               confirmLabel: 'Confirm Alice Side',
@@ -290,6 +377,7 @@ class _PracticeEncounterScreenState extends State<PracticeEncounterScreen> {
             PracticePartyOutcome.pending => SasConfirmationPanel(
               key: ValueKey('bob_sas_$bobFingerprint'),
               title: 'Bob: Verify Alice\'s 6-Digit Code',
+              codeLabel: 'Bob\'s 6-digit code:',
               comparison: _controller.bobComparison!,
               inlineError: _controller.bobError,
               confirmLabel: 'Confirm Bob Side',

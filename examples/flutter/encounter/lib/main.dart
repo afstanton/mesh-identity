@@ -1,5 +1,6 @@
 import 'dart:async';
 
+import 'package:flutter/services.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'core/config.dart';
@@ -278,12 +279,27 @@ class _UnavailableScreen extends StatelessWidget {
 
   const _UnavailableScreen({required this.controller});
 
+  String _friendlySummary(String? rawError) {
+    final lower = (rawError ?? '').toLowerCase();
+    if (lower.contains('-34018') ||
+        lower.contains('-50') ||
+        lower.contains('keychain') ||
+        lower.contains('security result code')) {
+      return 'The OS keychain rejected access for this build (missing '
+          'signing/entitlement or keychain parameter mismatch). Check your '
+          'system keychain or signing configuration and try again.';
+    }
+    return 'Local identity storage could not be accessed right now. '
+        'Your existing keys have not been modified.';
+  }
+
   @override
   Widget build(BuildContext context) {
+    final rawDetails = controller.errorMessage;
     return Scaffold(
       appBar: AppBar(title: const Text(AppConfig.appName)),
       body: Center(
-        child: Padding(
+        child: SingleChildScrollView(
           padding: const EdgeInsets.all(24),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 480),
@@ -297,20 +313,55 @@ class _UnavailableScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 16),
                 Text(
-                  'Identity Temporarily Unavailable',
+                  'Identity Storage Unavailable',
                   style: Theme.of(context).textTheme.headlineSmall,
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 12),
-                Text(
-                  controller.errorMessage ??
-                      'Local identity storage could not be accessed right now.',
-                  textAlign: TextAlign.center,
-                ),
+                Text(_friendlySummary(rawDetails), textAlign: TextAlign.center),
+                if (rawDetails != null && rawDetails.trim().isNotEmpty) ...[
+                  const SizedBox(height: 16),
+                  ExpansionTile(
+                    key: const Key('storage_error_details_tile'),
+                    title: const Text('Technical Details'),
+                    childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    children: [
+                      SelectableText(
+                        rawDetails,
+                        style: AppTheme.monospaceStyle(context)
+                            .copyWith(fontSize: 12),
+                      ),
+                    ],
+                  ),
+                ],
                 const SizedBox(height: 24),
-                FilledButton(
-                  onPressed: controller.initialize,
-                  child: const Text('Retry'),
+                Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  alignment: WrapAlignment.center,
+                  children: [
+                    if (rawDetails != null && rawDetails.trim().isNotEmpty)
+                      OutlinedButton.icon(
+                        key: const Key('copy_storage_diagnostics_button'),
+                        onPressed: () async {
+                          await Clipboard.setData(
+                            ClipboardData(text: rawDetails),
+                          );
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Diagnostics copied to clipboard.'),
+                            ),
+                          );
+                        },
+                        icon: const Icon(Icons.copy_outlined, size: 18),
+                        label: const Text('Copy Diagnostics'),
+                      ),
+                    FilledButton(
+                      onPressed: controller.initialize,
+                      child: const Text('Retry'),
+                    ),
+                  ],
                 ),
               ],
             ),

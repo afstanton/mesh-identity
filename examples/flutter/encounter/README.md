@@ -41,6 +41,8 @@ flutter run -d macos    # or ios, android, windows, linux
 ```
 
 > **Linux desktop prerequisite:** `camera_desktop` requires GStreamer development packages (`sudo apt install libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev gstreamer1.0-plugins-good`) and `libsecret-1-dev` for `flutter_secure_storage`.
+>
+> **macOS Keychain note:** `FlutterSecureKeyringService` uses the macOS Data Protection Keychain (`usesDataProtectionKeychain: true`) for signed builds and falls back to a debug-only local keyring file in `Application Support` (`debug_keyring_fallback.json`) when unsigned/ad-hoc debug builds hit Keychain `-34018`/`-50` errors.
 
 By default, the application builds with public open-source placeholders:
 - **Application ID / Bundle ID**: `org.mesh.identity.encounter`

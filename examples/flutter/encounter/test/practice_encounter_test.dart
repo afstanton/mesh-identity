@@ -224,5 +224,80 @@ void main() {
         expect(identityController.contactsCount, equals(0));
       },
     );
+
+    testWidgets(
+      'mobile viewport focuses active party per step, auto-switches to Bob after Alice confirms, and formats local timestamp',
+      (WidgetTester tester) async {
+        tester.view.physicalSize = const Size(390, 844);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(() {
+          tester.view.resetPhysicalSize();
+          tester.view.resetDevicePixelRatio();
+        });
+
+        await tester.pumpWidget(
+          const MaterialApp(home: PracticeEncounterScreen()),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byKey(const Key('practice_step_banner')), findsOneWidget);
+        expect(find.text('Alice (Initiator)'), findsOneWidget);
+        expect(find.text('Bob (Responder)'), findsNothing);
+
+        final sendOffer = find.byKey(const Key('practice_send_offer'));
+        await tester.ensureVisible(sendOffer);
+        await tester.tap(sendOffer);
+        await tester.pumpAndSettle();
+        expect(find.text('Bob (Responder)'), findsOneWidget);
+        expect(find.text('Alice (Initiator)'), findsNothing);
+
+        final sendResponse = find.byKey(const Key('practice_send_response'));
+        await tester.ensureVisible(sendResponse);
+        await tester.tap(sendResponse);
+        await tester.pumpAndSettle();
+        expect(find.text('Alice (Initiator)'), findsOneWidget);
+
+        final sendReveal = find.byKey(const Key('practice_send_reveal'));
+        await tester.ensureVisible(sendReveal);
+        await tester.tap(sendReveal);
+        await tester.pumpAndSettle();
+
+        expect(
+          find.byKey(const Key('practice_party_selector')),
+          findsOneWidget,
+        );
+        expect(find.text("Alice's 6-digit code:"), findsOneWidget);
+
+        final aliceSasText = tester
+            .widget<SelectableText>(find.byKey(const Key('practice_alice_sas')))
+            .data!
+            .replaceAll(' ', '');
+        await tester.enterText(
+          find.byKey(const Key('practice_alice_input')),
+          aliceSasText,
+        );
+        await tester.pump();
+        final aliceConfirm = find.byKey(const Key('practice_alice_confirm'));
+        await tester.ensureVisible(aliceConfirm);
+        await tester.tap(aliceConfirm);
+        await tester.pumpAndSettle();
+
+        // Auto-switches to Bob's SAS panel on narrow viewport.
+        expect(find.text("Bob's 6-digit code:"), findsOneWidget);
+        await tester.enterText(
+          find.byKey(const Key('practice_bob_input')),
+          aliceSasText,
+        );
+        await tester.pump();
+        final bobConfirm = find.byKey(const Key('practice_bob_confirm'));
+        await tester.ensureVisible(bobConfirm);
+        await tester.tap(bobConfirm);
+        await tester.pumpAndSettle();
+
+        expect(find.text('Bob Verified Alice'), findsOneWidget);
+        expect(find.textContaining('Verified: '), findsOneWidget);
+        expect(find.textContaining('Verified (UTC):'), findsNothing);
+      },
+    );
   });
 }

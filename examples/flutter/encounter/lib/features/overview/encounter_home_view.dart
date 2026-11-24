@@ -235,9 +235,9 @@ class _EncounterHomeViewState extends State<EncounterHomeView> {
                       const SizedBox(height: 8),
                       Text(
                         'Exchange cryptographic Offer, Response, and Reveal payloads '
-                        'between two devices via QR display and clipboard URI import, '
-                        'then confirm the 6-digit SAS code together. Hardware camera '
-                        'scanning arrives in Slice 5.',
+                        'between two devices via camera QR scanning, nearby '
+                        'Bluetooth (BLE), or clipboard URI import, then confirm '
+                        'the 6-digit SAS code together.',
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),

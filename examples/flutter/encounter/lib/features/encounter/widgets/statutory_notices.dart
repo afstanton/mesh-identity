@@ -20,12 +20,37 @@ class VerifiedContactCard extends StatelessWidget {
     this.onDone,
   });
 
+  static const List<String> _months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+
+  static String _formatLocalTimestamp(DateTime dt) {
+    final local = dt.toLocal();
+    final month = _months[local.month - 1];
+    final hour12 = local.hour % 12 == 0 ? 12 : local.hour % 12;
+    final minute = local.minute.toString().padLeft(2, '0');
+    final period = local.hour >= 12 ? 'PM' : 'AM';
+    return '${local.day} $month ${local.year}, $hour12:$minute $period';
+  }
+
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final fullHex = formatHexKey(contact.peerPublicKey);
     final shortHex = shortHexKey(contact.peerPublicKey);
     final verifiedUtc = contact.verifiedAt.toUtc().toIso8601String();
+    final verifiedLocal = _formatLocalTimestamp(contact.verifiedAt);
 
     return Card(
       child: Padding(
@@ -77,10 +102,13 @@ class VerifiedContactCard extends StatelessWidget {
                   label: Text('Encounters: ${contact.encounterCount}'),
                   visualDensity: VisualDensity.compact,
                 ),
-                Chip(
-                  avatar: const Icon(Icons.schedule, size: 16),
-                  label: Text('Verified (UTC): $verifiedUtc'),
-                  visualDensity: VisualDensity.compact,
+                Tooltip(
+                  message: 'UTC: $verifiedUtc',
+                  child: Chip(
+                    avatar: const Icon(Icons.schedule, size: 16),
+                    label: Text('Verified: $verifiedLocal'),
+                    visualDensity: VisualDensity.compact,
+                  ),
                 ),
               ],
             ),

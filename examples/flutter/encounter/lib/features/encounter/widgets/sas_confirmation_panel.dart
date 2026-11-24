@@ -19,6 +19,7 @@ class SasConfirmationPanel extends StatefulWidget {
   final Key? inputKey;
   final Key? confirmButtonKey;
   final Key? cancelButtonKey;
+  final String codeLabel;
 
   const SasConfirmationPanel({
     super.key,
@@ -29,6 +30,7 @@ class SasConfirmationPanel extends StatefulWidget {
     this.enabled = true,
     this.onCancel,
     this.confirmLabel = 'Confirm & Save Contact',
+    this.codeLabel = 'This device\'s 6-digit code:',
     this.codeKey,
     this.inputKey,
     this.confirmButtonKey,
@@ -69,7 +71,7 @@ class _SasConfirmationPanelState extends State<SasConfirmationPanel> {
             Text(widget.title, style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
             Text(
-              'This device\'s 6-digit code:',
+              widget.codeLabel,
               style: Theme.of(context).textTheme.labelMedium
                   ?.copyWith(color: colorScheme.onSurfaceVariant),
             ),

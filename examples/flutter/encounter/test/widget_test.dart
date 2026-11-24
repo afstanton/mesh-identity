@@ -8,6 +8,7 @@ import 'package:encounter/services/link_launcher.dart';
 import 'package:encounter/services/snapshot_storage.dart';
 import 'package:encounter/shell/adaptive_shell.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:material_ui/material_ui.dart';
 
 class _TransientUnavailableStorage implements SnapshotStorageService {
   final InMemorySnapshotStorageService inner;
@@ -126,7 +127,15 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(AdaptiveShell), findsNothing);
-      expect(find.text('Identity Temporarily Unavailable'), findsOneWidget);
+      expect(find.text('Identity Storage Unavailable'), findsOneWidget);
+      expect(
+        find.byKey(const Key('storage_error_details_tile')),
+        findsOneWidget,
+      );
+      expect(
+        find.byKey(const Key('copy_storage_diagnostics_button')),
+        findsOneWidget,
+      );
       expect(find.text('Retry'), findsOneWidget);
       expect(find.text('Reset Identity'), findsNothing);
 

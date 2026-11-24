@@ -86,11 +86,24 @@ class MeshInstallation implements ffi.Finalizable {
     _finalizer.attach(this, handle, detach: this);
   }
 
+  /// Internal constructor for a borrowed installation view owned by a [MeshGroupHandle].
+  MeshInstallation.borrowedView(
+    ffi.Pointer<ffi.Void> handle, {
+    required Object owner,
+    required bool Function() isOwnerDisposed,
+  }) : _handle = handle,
+       _ownerRef = owner,
+       _isOwnerDisposed = isOwnerDisposed {
+    _finalizer.attach(this, handle, detach: this);
+  }
+
   static final ffi.NativeFinalizer _finalizer = ffi.NativeFinalizer(
     ffi.Native.addressOf(mesh_installation_free),
   );
 
   ffi.Pointer<ffi.Void> _handle;
+  Object? _ownerRef;
+  bool Function()? _isOwnerDisposed;
   bool _isPoisoned = false;
   HandoffResult? _pendingHandoff;
   AcceptHandoffResult? _pendingAccept;
@@ -104,7 +117,8 @@ class MeshInstallation implements ffi.Finalizable {
   AcceptHandoffResult? get pendingAccept => _pendingAccept;
 
   /// Whether this installation has been explicitly closed.
-  bool get isDisposed => _handle == ffi.nullptr;
+  bool get isDisposed =>
+      _handle == ffi.nullptr || (_isOwnerDisposed?.call() ?? false);
 
   void _checkDisposed() {
     if (isDisposed) {
@@ -131,6 +145,11 @@ class MeshInstallation implements ffi.Finalizable {
   /// Native handle used when transferring ownership to [MeshGroupHandle].
   ffi.Pointer<ffi.Void> get handleForTransfer {
     _checkDisposed();
+    if (_ownerRef != null) {
+      throw const InvalidArgumentsException(
+        'Cannot transfer ownership of a borrowed MeshInstallation view.',
+      );
+    }
     return _handle;
   }
 
@@ -142,8 +161,24 @@ class MeshInstallation implements ffi.Finalizable {
     _handle = ffi.nullptr;
   }
 
+  /// Internal invalidation called by the owning [MeshGroupHandle] on dispose.
+  void invalidateBorrowedView() {
+    if (_handle != ffi.nullptr) {
+      _finalizer.detach(this);
+      mesh_installation_free(_handle);
+      _handle = ffi.nullptr;
+    }
+    _ownerRef = null;
+    _isOwnerDisposed = null;
+  }
+
   /// Explicitly release native resources held by this installation.
   void dispose() {
+    if (_ownerRef != null) {
+      throw const InvalidArgumentsException(
+        'Cannot dispose a borrowed MeshInstallation view; dispose the parent MeshGroupHandle instead.',
+      );
+    }
     if (!isDisposed) {
       _finalizer.detach(this);
       mesh_installation_free(_handle);

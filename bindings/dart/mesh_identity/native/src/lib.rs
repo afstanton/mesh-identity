@@ -200,10 +200,73 @@ pub unsafe extern "C" fn mesh_last_rate_limit_until_ms(
     result.unwrap_or(MESH_ERR_PANIC)
 }
 
-/// Opaque wrapper around a local identity `Installation`.
+enum InstallationBacking {
+    Owned(Box<Installation>),
+    /// Non-owning pointer into a live `MeshGroupHandle`.
+    /// Dropping the wrapper box never frees the parent `MeshGroupHandle`.
+    BorrowedGroup(*mut MeshGroupHandle),
+}
+
+/// Opaque wrapper around a local identity `Installation` (owned or borrowed from `MeshGroupHandle`).
 pub struct MeshInstallationHandle {
-    pub installation: Installation,
+    backing: InstallationBacking,
     pub is_poisoned: bool,
+}
+
+impl MeshInstallationHandle {
+    fn owned(installation: Installation) -> Self {
+        Self {
+            backing: InstallationBacking::Owned(Box::new(installation)),
+            is_poisoned: false,
+        }
+    }
+
+    fn is_borrowed(&self) -> bool {
+        matches!(self.backing, InstallationBacking::BorrowedGroup(_))
+    }
+
+    fn is_poisoned(&self) -> bool {
+        match self.backing {
+            InstallationBacking::Owned(_) => self.is_poisoned,
+            InstallationBacking::BorrowedGroup(ptr) => {
+                self.is_poisoned || unsafe { (&*ptr).is_poisoned }
+            }
+        }
+    }
+
+    fn set_poisoned(&mut self) {
+        self.is_poisoned = true;
+        if let InstallationBacking::BorrowedGroup(ptr) = self.backing {
+            unsafe {
+                (*ptr).is_poisoned = true;
+            }
+        }
+    }
+
+    fn installation(&self) -> &Installation {
+        match self.backing {
+            InstallationBacking::Owned(ref inst) => inst,
+            InstallationBacking::BorrowedGroup(ptr) => unsafe {
+                (*ptr).group_handle.installation()
+            },
+        }
+    }
+
+    fn installation_mut(&mut self) -> &mut Installation {
+        match self.backing {
+            InstallationBacking::Owned(ref mut inst) => inst,
+            InstallationBacking::BorrowedGroup(ptr) => unsafe {
+                (*ptr).group_handle.installation_mut()
+            },
+        }
+    }
+
+    fn into_owned(self) -> Option<Installation> {
+        match self.backing {
+            InstallationBacking::Owned(inst) => Some(*inst),
+            InstallationBacking::BorrowedGroup(_) => None,
+        }
+    }
 }
 
 /// Create a new local `Installation` with an initial Ed25519 identity.
@@ -239,10 +302,7 @@ pub unsafe extern "C" fn mesh_installation_create(
         seed.zeroize();
 
         let inst = Installation::new(signing_key);
-        let handle = Box::into_raw(Box::new(MeshInstallationHandle {
-            installation: inst,
-            is_poisoned: false,
-        }));
+        let handle = Box::into_raw(Box::new(MeshInstallationHandle::owned(inst)));
         unsafe {
             *out_handle = handle;
         }
@@ -285,11 +345,11 @@ pub unsafe extern "C" fn mesh_installation_set_max_identities(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
-        match handle.installation.set_max_identities(limit) {
+        match handle.installation_mut().set_max_identities(limit) {
             Ok(()) => MESH_OK,
             Err(e) => {
                 set_last_error(e.to_string());
@@ -300,7 +360,7 @@ pub unsafe extern "C" fn mesh_installation_set_max_identities(
     result.unwrap_or_else(|_| {
         if !handle.is_null() {
             unsafe {
-                (*handle).is_poisoned = true;
+                (*handle).set_poisoned();
             }
         }
         set_last_error("native panic caught at FFI boundary; handle is now poisoned");
@@ -328,11 +388,11 @@ pub unsafe extern "C" fn mesh_installation_selected(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &*handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
-        let selected = handle.installation.selected();
+        let selected = handle.installation().selected();
         unsafe {
             std::ptr::copy_nonoverlapping(selected.as_ptr(), out_pk, 32);
         }
@@ -359,10 +419,10 @@ pub unsafe extern "C" fn mesh_installation_identities_count(
             return 0;
         }
         let handle = unsafe { &*handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             return 0;
         }
-        handle.installation.identities().len()
+        handle.installation().identities().len()
     }));
     result.unwrap_or(0)
 }
@@ -388,11 +448,11 @@ pub unsafe extern "C" fn mesh_installation_identities_get(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &*handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
-        let identities = handle.installation.identities();
+        let identities = handle.installation().identities();
         if let Some(pk) = identities.get(index) {
             unsafe {
                 std::ptr::copy_nonoverlapping(pk.as_ptr(), out_pk, 32);
@@ -431,7 +491,7 @@ pub unsafe extern "C" fn mesh_installation_select_identity(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -439,7 +499,7 @@ pub unsafe extern "C" fn mesh_installation_select_identity(
         let mut identity = [0u8; 32];
         identity.copy_from_slice(bytes);
 
-        match handle.installation.select(identity, now) {
+        match handle.installation_mut().select(identity, now) {
             Ok(()) => MESH_OK,
             Err(e) => {
                 set_last_error(e.to_string());
@@ -487,7 +547,7 @@ pub unsafe extern "C" fn mesh_installation_add_identity(
         }
 
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -498,7 +558,7 @@ pub unsafe extern "C" fn mesh_installation_add_identity(
         seed.zeroize();
         let pk = signing_key.verifying_key().to_bytes();
 
-        match handle.installation.add_identity(signing_key) {
+        match handle.installation_mut().add_identity(signing_key) {
             Ok(_) => {
                 if !out_pk.is_null() {
                     unsafe {
@@ -545,7 +605,7 @@ pub unsafe extern "C" fn mesh_installation_remove_identity(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -553,7 +613,7 @@ pub unsafe extern "C" fn mesh_installation_remove_identity(
         let mut identity = [0u8; 32];
         identity.copy_from_slice(bytes);
 
-        match handle.installation.remove_identity(identity) {
+        match handle.installation_mut().remove_identity(identity) {
             Ok(()) => MESH_OK,
             Err(e) => {
                 set_last_error(e.to_string());
@@ -594,11 +654,11 @@ pub unsafe extern "C" fn mesh_installation_save(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
-        match handle.installation.save_bytes(now) {
+        match handle.installation_mut().save_bytes(now) {
             Ok(bytes) => {
                 let mut boxed = bytes.into_boxed_slice();
                 unsafe {
@@ -696,10 +756,7 @@ pub unsafe extern "C" fn mesh_installation_restore(
 
         match Installation::restore_bytes(snapshot_bytes, signing_keys) {
             Ok(inst) => {
-                let handle = Box::into_raw(Box::new(MeshInstallationHandle {
-                    installation: inst,
-                    is_poisoned: false,
-                }));
+                let handle = Box::into_raw(Box::new(MeshInstallationHandle::owned(inst)));
                 unsafe {
                     *out_handle = handle;
                 }
@@ -786,11 +843,11 @@ pub unsafe extern "C" fn mesh_installation_contacts_count(
             return 0;
         }
         let handle = unsafe { &*handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             return 0;
         }
         let id = if identity_pk.is_null() {
-            handle.installation.selected()
+            handle.installation().selected()
         } else {
             if identity_pk_len != 32 {
                 return 0;
@@ -801,7 +858,7 @@ pub unsafe extern "C" fn mesh_installation_contacts_count(
         };
 
         handle
-            .installation
+            .installation()
             .contacts(id)
             .map(|c| c.count())
             .unwrap_or(0)
@@ -834,12 +891,12 @@ pub unsafe extern "C" fn mesh_installation_get_contact(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &*handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
         let id = if identity_pk.is_null() {
-            handle.installation.selected()
+            handle.installation().selected()
         } else {
             if identity_pk_len != 32 {
                 set_last_error("identity_pk must be 32 bytes");
@@ -853,7 +910,7 @@ pub unsafe extern "C" fn mesh_installation_get_contact(
         let mut peer = [0u8; 32];
         peer.copy_from_slice(unsafe { slice::from_raw_parts(peer_pk, 32) });
 
-        let store = match handle.installation.contacts(id) {
+        let store = match handle.installation().contacts(id) {
             Some(s) => s,
             None => {
                 set_last_error("unknown identity in mesh_installation_get_contact");
@@ -926,12 +983,12 @@ pub unsafe extern "C" fn mesh_installation_block_contact(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
         let id = if identity_pk.is_null() {
-            handle.installation.selected()
+            handle.installation().selected()
         } else {
             if identity_pk_len != 32 {
                 set_last_error("identity_pk must be 32 bytes");
@@ -945,7 +1002,7 @@ pub unsafe extern "C" fn mesh_installation_block_contact(
         let mut peer = [0u8; 32];
         peer.copy_from_slice(unsafe { slice::from_raw_parts(peer_pk, 32) });
 
-        match handle.installation.block_contact(id, peer) {
+        match handle.installation_mut().block_contact(id, peer) {
             Ok(()) => MESH_OK,
             Err(e) => {
                 set_last_error(e.to_string());
@@ -988,15 +1045,15 @@ pub unsafe extern "C" fn mesh_installation_list_contacts(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &*handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
-        let id = match resolve_identity_arg(&handle.installation, identity_pk, identity_pk_len) {
+        let id = match resolve_identity_arg(handle.installation(), identity_pk, identity_pk_len) {
             Ok(pk) => pk,
             Err(code) => return code,
         };
-        let store = match handle.installation.contacts(id) {
+        let store = match handle.installation().contacts(id) {
             Some(s) => s,
             None => {
                 set_last_error("unknown identity in mesh_installation_list_contacts");
@@ -1052,18 +1109,18 @@ pub unsafe extern "C" fn mesh_installation_unblock_contact(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
-        let id = match resolve_identity_arg(&handle.installation, identity_pk, identity_pk_len) {
+        let id = match resolve_identity_arg(handle.installation(), identity_pk, identity_pk_len) {
             Ok(pk) => pk,
             Err(code) => return code,
         };
         let mut peer = [0u8; 32];
         peer.copy_from_slice(unsafe { slice::from_raw_parts(peer_pk, 32) });
 
-        match handle.installation.unblock_contact(id, peer) {
+        match handle.installation_mut().unblock_contact(id, peer) {
             Ok(()) => MESH_OK,
             Err(e) => {
                 set_last_error(e.to_string());
@@ -1113,11 +1170,11 @@ pub unsafe extern "C" fn mesh_installation_set_contact_alias(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
-        let id = match resolve_identity_arg(&handle.installation, identity_pk, identity_pk_len) {
+        let id = match resolve_identity_arg(handle.installation(), identity_pk, identity_pk_len) {
             Ok(pk) => pk,
             Err(code) => return code,
         };
@@ -1133,7 +1190,7 @@ pub unsafe extern "C" fn mesh_installation_set_contact_alias(
             }
         };
 
-        match handle.installation.set_contact_alias(id, peer, alias_str) {
+        match handle.installation_mut().set_contact_alias(id, peer, alias_str) {
             Ok(()) => MESH_OK,
             Err(e) => {
                 set_last_error(e.to_string());
@@ -1175,12 +1232,12 @@ pub unsafe extern "C" fn mesh_installation_import_peer_key(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
         let local = if local_pk.is_null() {
-            handle.installation.selected()
+            handle.installation().selected()
         } else {
             if local_pk_len != 32 {
                 set_last_error("local_pk must be 32 bytes");
@@ -1194,7 +1251,7 @@ pub unsafe extern "C" fn mesh_installation_import_peer_key(
         let mut peer = [0u8; 32];
         peer.copy_from_slice(unsafe { slice::from_raw_parts(peer_pk, 32) });
 
-        match handle.installation.import_peer_key(local, peer, &mut OsRng) {
+        match handle.installation_mut().import_peer_key(local, peer, &mut OsRng) {
             Ok(_) => MESH_OK,
             Err(e) => {
                 set_last_error(e.to_string());
@@ -1262,11 +1319,11 @@ pub unsafe extern "C" fn mesh_installation_start(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
-        match handle.installation.start(now, &mut OsRng) {
+        match handle.installation_mut().start(now, &mut OsRng) {
             Ok((ceremony, payload)) => {
                 let ceremony_handle = Box::into_raw(Box::new(MeshCeremonyHandle {
                     ceremony,
@@ -1320,11 +1377,11 @@ pub unsafe extern "C" fn mesh_installation_open_scanner(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
-        match handle.installation.open_scanner(now) {
+        match handle.installation_mut().open_scanner(now) {
             Ok(ceremony) => {
                 let ceremony_handle = Box::into_raw(Box::new(MeshCeremonyHandle {
                     ceremony,
@@ -1383,7 +1440,7 @@ pub unsafe extern "C" fn mesh_installation_scan_offer(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -1391,7 +1448,7 @@ pub unsafe extern "C" fn mesh_installation_scan_offer(
         let slice = unsafe { slice::from_raw_parts(bytes, bytes_len) };
 
         match handle
-            .installation
+            .installation_mut()
             .scan_offer(&ceremony.ceremony, slice, now, &mut OsRng)
         {
             Ok(payload) => {
@@ -1451,7 +1508,7 @@ pub unsafe extern "C" fn mesh_installation_scan_response(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -1459,7 +1516,7 @@ pub unsafe extern "C" fn mesh_installation_scan_response(
         let slice = unsafe { slice::from_raw_parts(bytes, bytes_len) };
 
         match handle
-            .installation
+            .installation_mut()
             .scan_response(&ceremony.ceremony, slice, now)
         {
             Ok(payload) => {
@@ -1511,7 +1568,7 @@ pub unsafe extern "C" fn mesh_installation_scan_reveal(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -1519,7 +1576,7 @@ pub unsafe extern "C" fn mesh_installation_scan_reveal(
         let slice = unsafe { slice::from_raw_parts(bytes, bytes_len) };
 
         match handle
-            .installation
+            .installation_mut()
             .scan_reveal(&ceremony.ceremony, slice, now)
         {
             Ok(()) => MESH_OK,
@@ -1565,13 +1622,13 @@ pub unsafe extern "C" fn mesh_installation_comparison(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
         let ceremony = unsafe { &mut *ceremony };
 
-        match handle.installation.comparison(&ceremony.ceremony, now) {
+        match handle.installation_mut().comparison(&ceremony.ceremony, now) {
             Ok(Some(comp)) => {
                 unsafe {
                     *out_code = comp.code;
@@ -1623,7 +1680,7 @@ pub unsafe extern "C" fn mesh_installation_confirm_and_save(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -1639,7 +1696,7 @@ pub unsafe extern "C" fn mesh_installation_confirm_and_save(
             }
         };
 
-        match handle.installation.confirm_and_save(
+        match handle.installation_mut().confirm_and_save(
             &ceremony.ceremony,
             comp,
             peer_code,
@@ -1702,13 +1759,13 @@ pub unsafe extern "C" fn mesh_installation_cancel_ceremony(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
         let ceremony = unsafe { &mut *ceremony };
 
-        match handle.installation.cancel(&ceremony.ceremony, now) {
+        match handle.installation_mut().cancel(&ceremony.ceremony, now) {
             Ok(()) => MESH_OK,
             Err(e) => {
                 set_last_error(e.to_string());
@@ -1771,11 +1828,11 @@ pub unsafe extern "C" fn mesh_installation_device_nonce(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
-        let nonce = handle.installation.device_nonce(&mut OsRng);
+        let nonce = handle.installation_mut().device_nonce(&mut OsRng);
         unsafe {
             std::ptr::copy_nonoverlapping(nonce.as_ptr(), out_nonce, 32);
         }
@@ -1816,11 +1873,11 @@ pub unsafe extern "C" fn mesh_installation_current_device_nonce(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &*handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
-        match handle.installation.current_device_nonce() {
+        match handle.installation().current_device_nonce() {
             Some(nonce) => unsafe {
                 std::ptr::copy_nonoverlapping(nonce.as_ptr(), out_nonce, 32);
                 *out_has_nonce = true;
@@ -1866,13 +1923,13 @@ pub unsafe extern "C" fn mesh_installation_voting_state(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &*handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
 
         let state = if key_ptr.is_null() || key_len == 0 {
-            handle.installation.voting_state()
+            handle.installation().voting_state()
         } else {
             if key_len != 32 {
                 set_last_error("key must be exactly 32 bytes");
@@ -1882,11 +1939,11 @@ pub unsafe extern "C" fn mesh_installation_voting_state(
             unsafe {
                 std::ptr::copy_nonoverlapping(key_ptr, id.as_mut_ptr(), 32);
             }
-            if !handle.installation.identities().contains(&id) {
+            if !handle.installation().identities().contains(&id) {
                 set_last_error("unknown identity specified");
                 return MESH_ERR_UNKNOWN_IDENTITY;
             }
-            handle.installation.voting_record(id).state
+            handle.installation().voting_record(id).state
         };
 
         unsafe {
@@ -1935,15 +1992,15 @@ pub unsafe extern "C" fn mesh_installation_voting_record(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &*handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
 
         let record = if key_ptr.is_null() || key_len == 0 {
             handle
-                .installation
-                .voting_record(handle.installation.selected())
+                .installation()
+                .voting_record(handle.installation().selected())
         } else {
             if key_len != 32 {
                 set_last_error("key must be exactly 32 bytes");
@@ -1953,11 +2010,11 @@ pub unsafe extern "C" fn mesh_installation_voting_record(
             unsafe {
                 std::ptr::copy_nonoverlapping(key_ptr, id.as_mut_ptr(), 32);
             }
-            if !handle.installation.identities().contains(&id) {
+            if !handle.installation().identities().contains(&id) {
                 set_last_error("unknown identity specified");
                 return MESH_ERR_UNKNOWN_IDENTITY;
             }
-            handle.installation.voting_record(id)
+            handle.installation().voting_record(id)
         };
 
         unsafe {
@@ -2001,11 +2058,11 @@ pub unsafe extern "C" fn mesh_installation_gate_voting(handle: *mut MeshInstalla
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
-        handle.installation.gate_voting();
+        handle.installation_mut().gate_voting();
         MESH_OK
     }));
     result.unwrap_or_else(|_| {
@@ -2042,12 +2099,12 @@ pub unsafe extern "C" fn mesh_installation_begin_takeover(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
 
-        match handle.installation.begin_takeover(&mut OsRng, floor) {
+        match handle.installation_mut().begin_takeover(&mut OsRng, floor) {
             Ok(statement) => {
                 let json = TakeoverStatementJson {
                     identity: hex::encode(statement.identity),
@@ -2130,7 +2187,7 @@ pub unsafe extern "C" fn mesh_installation_begin_handoff(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -2141,14 +2198,14 @@ pub unsafe extern "C" fn mesh_installation_begin_handoff(
         }
 
         // Pre-validate that save_bytes succeeds before mutating voting state
-        if let Err(e) = handle.installation.save_bytes(now) {
+        if let Err(e) = handle.installation_mut().save_bytes(now) {
             set_last_error(e.to_string());
             return MESH_ERR_INVALID_SNAPSHOT;
         }
 
-        match handle.installation.begin_handoff(recipient, |_, _| Ok(())) {
+        match handle.installation_mut().begin_handoff(recipient, |_, _| Ok(())) {
             Ok(bundle) => {
-                let snapshot = match handle.installation.save_bytes(now) {
+                let snapshot = match handle.installation_mut().save_bytes(now) {
                     Ok(bytes) => bytes,
                     Err(e) => {
                         set_last_error(e.to_string());
@@ -2221,7 +2278,7 @@ pub unsafe extern "C" fn mesh_installation_accept_handoff(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -2236,14 +2293,14 @@ pub unsafe extern "C" fn mesh_installation_accept_handoff(
         };
 
         // Pre-validate that save_bytes succeeds before mutating voting state
-        if let Err(e) = handle.installation.save_bytes(now) {
+        if let Err(e) = handle.installation_mut().save_bytes(now) {
             set_last_error(e.to_string());
             return MESH_ERR_INVALID_SNAPSHOT;
         }
 
-        match handle.installation.accept_handoff(&bundle, |_| Ok(())) {
+        match handle.installation_mut().accept_handoff(&bundle, |_| Ok(())) {
             Ok(state) => {
-                let snapshot = match handle.installation.save_bytes(now) {
+                let snapshot = match handle.installation_mut().save_bytes(now) {
                     Ok(bytes) => bytes,
                     Err(e) => {
                         set_last_error(e.to_string());
@@ -2363,6 +2420,12 @@ pub unsafe extern "C" fn mesh_handoff_bundle_inspect(
 pub struct MeshGroupHandle {
     pub group_handle: mesh_identity::groups::handle::GroupHandle,
     pub is_poisoned: bool,
+}
+
+impl MeshGroupHandle {
+    fn is_poisoned(&self) -> bool {
+        self.is_poisoned
+    }
 }
 
 #[derive(Serialize)]
@@ -2582,19 +2645,68 @@ pub unsafe extern "C" fn mesh_group_handle_from_installation(
             return MESH_ERR_INVALID_ARG;
         }
         let inst_ref = unsafe { &mut *inst_handle };
-        if inst_ref.is_poisoned {
+        if inst_ref.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
+        if inst_ref.is_borrowed() {
+            set_last_error("cannot transfer ownership of a borrowed MeshInstallation view");
+            return MESH_ERR_INVALID_ARG;
+        }
 
         let inst_box = unsafe { Box::from_raw(inst_handle) };
-        let group_handle = mesh_identity::groups::handle::GroupHandle::new(inst_box.installation);
+        let Some(owned_inst) = inst_box.into_owned() else {
+            set_last_error("cannot transfer ownership of a borrowed MeshInstallation view");
+            return MESH_ERR_INVALID_ARG;
+        };
+        let group_handle = mesh_identity::groups::handle::GroupHandle::new(owned_inst);
         let handle = Box::into_raw(Box::new(MeshGroupHandle {
             group_handle,
             is_poisoned: false,
         }));
         unsafe {
             *out_handle = handle;
+        }
+        MESH_OK
+    }));
+    result.unwrap_or_else(|_| {
+        set_last_error("native panic caught at FFI boundary");
+        MESH_ERR_PANIC
+    })
+}
+
+/// Create a borrowed `MeshInstallationHandle` view into a live `MeshGroupHandle`.
+///
+/// The returned handle does not own the underlying `Installation`; its lifetime is
+/// bounded by the parent `MeshGroupHandle` and must be invalidated before freeing
+/// the parent `MeshGroupHandle`.
+///
+/// # Safety
+///
+/// - `handle` must be a valid, non-null pointer to a `MeshGroupHandle`.
+/// - `out_inst_handle` must be a valid, non-null writable pointer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mesh_group_handle_installation_view(
+    handle: *mut MeshGroupHandle,
+    out_inst_handle: *mut *mut MeshInstallationHandle,
+) -> i32 {
+    clear_last_error();
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        if handle.is_null() || out_inst_handle.is_null() {
+            set_last_error("invalid arguments passed to mesh_group_handle_installation_view");
+            return MESH_ERR_INVALID_ARG;
+        }
+        let group_ref = unsafe { &mut *handle };
+        if group_ref.is_poisoned {
+            set_last_error("group handle is poisoned from a prior panic");
+            return MESH_ERR_PANIC;
+        }
+        let view = Box::into_raw(Box::new(MeshInstallationHandle {
+            backing: InstallationBacking::BorrowedGroup(handle),
+            is_poisoned: false,
+        }));
+        unsafe {
+            *out_inst_handle = view;
         }
         MESH_OK
     }));
@@ -2637,7 +2749,7 @@ pub unsafe extern "C" fn mesh_group_handle_selected_identity(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("group handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -2680,7 +2792,7 @@ pub unsafe extern "C" fn mesh_group_handle_create_group(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("group handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -2760,7 +2872,7 @@ pub unsafe extern "C" fn mesh_group_handle_import_genesis(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("group handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -2817,7 +2929,7 @@ pub unsafe extern "C" fn mesh_group_handle_invite(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("group handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -2874,7 +2986,7 @@ pub unsafe extern "C" fn mesh_group_handle_accept(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("group handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -2933,7 +3045,7 @@ pub unsafe extern "C" fn mesh_group_handle_accept_authenticated(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("group handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -2991,7 +3103,7 @@ pub unsafe extern "C" fn mesh_group_handle_leave(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("group handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -3052,7 +3164,7 @@ pub unsafe extern "C" fn mesh_group_handle_receive_bytes(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("group handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -3112,7 +3224,7 @@ pub unsafe extern "C" fn mesh_group_handle_group_ids(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("group handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -3172,7 +3284,7 @@ pub unsafe extern "C" fn mesh_group_handle_get_group(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("group handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -3239,7 +3351,7 @@ pub unsafe extern "C" fn mesh_group_handle_pending_invitations(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("group handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -3313,7 +3425,7 @@ pub unsafe extern "C" fn mesh_group_handle_save(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("group handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -3372,7 +3484,7 @@ pub unsafe extern "C" fn mesh_group_handle_confirm_saved(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("group handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -3432,7 +3544,7 @@ pub unsafe extern "C" fn mesh_group_handle_take_outgoing(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("group handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -3492,7 +3604,7 @@ pub unsafe extern "C" fn mesh_group_handle_resend(handle: *mut MeshGroupHandle, 
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("group handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -3538,7 +3650,7 @@ pub unsafe extern "C" fn mesh_group_handle_op_state(
             return MESH_ERR_INVALID_ARG;
         }
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("group handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -3890,7 +4002,7 @@ pub unsafe extern "C" fn mesh_installation_openpgp_import_peer(
         }
 
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -3904,7 +4016,7 @@ pub unsafe extern "C" fn mesh_installation_openpgp_import_peer(
         let time = SystemTime::UNIX_EPOCH + Duration::from_secs(timestamp_secs);
 
         let (_record, provenance) = match mesh_identity::openpgp::import_peer(
-            &mut handle.installation,
+            handle.installation_mut(),
             cert,
             expected,
             uid,
@@ -4002,7 +4114,7 @@ pub unsafe extern "C" fn mesh_installation_openpgp_import_owned(
         }
 
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -4021,7 +4133,7 @@ pub unsafe extern "C" fn mesh_installation_openpgp_import_owned(
         let time = SystemTime::UNIX_EPOCH + Duration::from_secs(timestamp_secs);
 
         let (mut seed, provenance) = match mesh_identity::openpgp::import_owned_with_seed(
-            &mut handle.installation,
+            handle.installation_mut(),
             cert,
             expected,
             uid,
@@ -4204,7 +4316,7 @@ pub unsafe extern "C" fn mesh_installation_openpgp_preview(
         };
 
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -4229,7 +4341,7 @@ pub unsafe extern "C" fn mesh_installation_openpgp_preview(
         };
 
         let preview = match mesh_identity::openpgp::ExportPreview::new(
-            &mut handle.installation,
+            handle.installation_mut(),
             profile,
             uid.to_vec(),
             created_secs,
@@ -4322,7 +4434,7 @@ pub unsafe extern "C" fn mesh_openpgp_preview_confirm(
         }
 
         let inst = unsafe { &mut *installation_handle };
-        if inst.is_poisoned {
+        if inst.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
@@ -4335,7 +4447,7 @@ pub unsafe extern "C" fn mesh_openpgp_preview_confirm(
             }
         };
 
-        let artifacts = match preview.confirm(&mut inst.installation) {
+        let artifacts = match preview.confirm(inst.installation_mut()) {
             Ok(a) => a,
             Err(e) => {
                 let err_str = e.to_string();
@@ -4442,13 +4554,13 @@ pub unsafe extern "C" fn mesh_installation_openpgp_remember_revocations(
         }
 
         let handle = unsafe { &mut *handle };
-        if handle.is_poisoned {
+        if handle.is_poisoned() {
             set_last_error("installation handle is poisoned from a prior panic");
             return MESH_ERR_PANIC;
         }
 
         let rev_bytes = unsafe { slice::from_raw_parts(rev_ptr, rev_len) };
-        match mesh_identity::openpgp::remember_peer_revocations(&mut handle.installation, rev_bytes)
+        match mesh_identity::openpgp::remember_peer_revocations(handle.installation_mut(), rev_bytes)
         {
             Ok(_) => MESH_OK,
             Err(e) => {

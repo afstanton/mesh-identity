@@ -1707,6 +1707,139 @@ void main() {
     });
 
     test(
+      'MeshGroupHandle.installation borrowed view stays synchronized and invalidates on parent dispose',
+      () {
+        final seed1 = MeshInstallation.generateSeed();
+        final seed2 = MeshInstallation.generateSeed();
+        final bob = MeshInstallation(seed: MeshInstallation.generateSeed());
+        final now = DateTime.utc(2026, 6, 1, 12, 0, 0);
+
+        final groupHandle = MeshGroupHandle(seed: seed1);
+        final view = groupHandle.installation;
+        expect(identical(groupHandle.installation, view), isTrue);
+
+        // Mutations on borrowed view are immediately visible to MeshGroupHandle
+        view.addIdentity(seed2);
+        expect(view.identities.length, equals(2));
+        view.selectIdentity(view.identities.first, at: now);
+
+        // Pair with Bob via the borrowed view, then create group & invite Bob
+        pairNodes(view, bob, now);
+        groupHandle.createGroup();
+        final save1 = groupHandle.save(at: now);
+        final events1 = groupHandle.confirmSaved(save1.token);
+        final groupId = events1.whereType<GroupCreatedEvent>().first.groupId;
+        groupHandle.takeOutgoing();
+
+        groupHandle.invite(
+          groupId: groupId,
+          candidateKey: bob.selectedIdentity,
+          at: now,
+        );
+        final save2 = groupHandle.save(at: now);
+        groupHandle.confirmSaved(save2.token);
+        expect(groupHandle.takeOutgoing().length, equals(1));
+
+        // Handoff on borrowed view transitions voting state in the same handle
+        final targetNonce = Uint8List(32)..[0] = 7;
+        final handoff = view.beginHandoff(targetNonce, at: now);
+        expect(handoff.bundle.rawBytes, isNotEmpty);
+        expect(view.getVotingState(), equals(VotingState.stopped));
+
+        // Save & restore MeshGroupHandle preserves all personas, contacts, groups, and Stopped voting state
+        final save3 = groupHandle.save(at: now);
+        groupHandle.confirmSaved(save3.token);
+        final restored = MeshGroupHandle.restore(
+          snapshotBlob: save3.blob,
+          signingKeySeeds: [seed1, seed2],
+        );
+        expect(restored.installation.identities.length, equals(2));
+        expect(
+          restored.installation.getVotingState(),
+          equals(VotingState.stopped),
+        );
+        expect(restored.getGroup(groupId), isNotNull);
+
+        // Cannot dispose or transfer borrowed view independently
+        expect(() => view.dispose(), throwsA(isA<InvalidArgumentsException>()));
+        expect(
+          () => MeshGroupHandle.fromInstallation(view),
+          throwsA(isA<InvalidArgumentsException>()),
+        );
+
+        // Disposing parent MeshGroupHandle invalidates the borrowed view
+        groupHandle.dispose();
+        expect(view.isDisposed, isTrue);
+        expect(() => view.selectedIdentity, throwsA(isA<DisposedException>()));
+
+        restored.dispose();
+        bob.dispose();
+      },
+    );
+
+    test(
+      'MeshGroupHandle.installation reflects post-group contact verification, persona switching, and restored handle sync',
+      () {
+        final seed1 = MeshInstallation.generateSeed();
+        final seed2 = MeshInstallation.generateSeed();
+        final bob = MeshInstallation(seed: MeshInstallation.generateSeed());
+        final now = DateTime.utc(2026, 6, 1, 12, 0, 0);
+
+        final groupHandle = MeshGroupHandle(seed: seed1);
+        final view = groupHandle.installation;
+
+        // 1. Create a group BEFORE verifying Bob
+        groupHandle.createGroup();
+        final save1 = groupHandle.save(at: now);
+        final events1 = groupHandle.confirmSaved(save1.token);
+        final groupId = events1.whereType<GroupCreatedEvent>().first.groupId;
+        groupHandle.takeOutgoing();
+
+        // 2. Verify Bob via the borrowed view AFTER the group already exists
+        pairNodes(view, bob, now);
+
+        // 3. Invite newly-verified Bob into the existing group
+        groupHandle.invite(
+          groupId: groupId,
+          candidateKey: bob.selectedIdentity,
+          at: now,
+        );
+        final save2 = groupHandle.save(at: now);
+        groupHandle.confirmSaved(save2.token);
+        final out = groupHandle.takeOutgoing();
+        expect(out.length, equals(1));
+        expect(out.first.tag, equals(MessageTag.invitation));
+
+        // 4. Add second persona & switch personas via borrowed view
+        final persona1 = view.selectedIdentity;
+        final persona2 = view.addIdentity(seed2);
+        view.selectIdentity(persona2, at: now);
+        expect(view.selectedIdentity, equals(persona2));
+        expect(groupHandle.getGroupIds(), isEmpty);
+
+        view.selectIdentity(persona1, at: now);
+        expect(groupHandle.getGroupIds(), equals([groupId]));
+
+        // 5. Save & restore, then verify restored.installation stays synchronized
+        final save3 = groupHandle.save(at: now);
+        groupHandle.confirmSaved(save3.token);
+        final restored = MeshGroupHandle.restore(
+          snapshotBlob: save3.blob,
+          signingKeySeeds: [seed1, seed2],
+        );
+        expect(restored.getGroupIds(), equals([groupId]));
+        restored.installation.selectIdentity(persona2, at: now);
+        expect(restored.getGroupIds(), isEmpty);
+        restored.installation.selectIdentity(persona1, at: now);
+        expect(restored.getGroupIds(), equals([groupId]));
+
+        restored.dispose();
+        groupHandle.dispose();
+        bob.dispose();
+      },
+    );
+
+    test(
       'atomic transfer preserves installation if native fails or throws',
       () {
         final seed = MeshInstallation.generateSeed();

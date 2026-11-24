@@ -149,10 +149,37 @@ class MeshGroupHandle implements ffi.Finalizable {
   );
 
   ffi.Pointer<ffi.Void> _handle;
+  MeshInstallation? _installationView;
   bool _isPoisoned = false;
 
   /// Whether this group handle has been explicitly disposed.
   bool get isDisposed => _handle == ffi.nullptr;
+
+  /// Borrowed [MeshInstallation] view backed by this group handle's inner installation.
+  ///
+  /// Mutations to personas, contacts, or voting/handoff state on this view are
+  /// immediately visible to this [MeshGroupHandle] and included in its snapshots.
+  /// The returned view cannot be disposed or transferred independently; its
+  /// lifetime ends when this [MeshGroupHandle] is disposed.
+  MeshInstallation get installation {
+    _checkDisposed();
+    final existing = _installationView;
+    if (existing != null && !existing.isDisposed) {
+      return existing;
+    }
+    return using((Arena arena) {
+      final outPtr = arena<ffi.Pointer<ffi.Void>>();
+      final res = mesh_group_handle_installation_view(_handle, outPtr);
+      _checkResult(res, 'Failed to obtain installation view');
+      final view = MeshInstallation.borrowedView(
+        outPtr.value,
+        owner: this,
+        isOwnerDisposed: () => isDisposed,
+      );
+      _installationView = view;
+      return view;
+    });
+  }
 
   void _checkDisposed() {
     if (isDisposed) {
@@ -187,6 +214,8 @@ class MeshGroupHandle implements ffi.Finalizable {
   /// Explicitly release native resources held by this group handle.
   void dispose() {
     if (!isDisposed) {
+      _installationView?.invalidateBorrowedView();
+      _installationView = null;
       _finalizer.detach(this);
       mesh_group_handle_free(_handle);
       _handle = ffi.nullptr;

@@ -1,3 +1,8 @@
+## 0.5.2
+
+- Exposed a safe borrowed `MeshInstallation` view on `MeshGroupHandle` (`groupHandle.installation`) backed by `mesh_group_handle_installation_view` in the FFI bridge, keeping personas, verified contacts, and monotonic voting/handoff state synchronized with group operations and snapshots.
+- Enforced lifetime and poison propagation on borrowed installation views: `dispose()` and `MeshGroupHandle.fromInstallation()` reject borrowed views with `InvalidArgumentsException`, and disposing the parent `MeshGroupHandle` invalidates its borrowed view.
+
 ## 0.5.1
 
 - Added contact governance methods on `MeshInstallation`: `listContacts`, `unblockContact`, and `setContactAlias` (with `MeshInstallation.maxAliasBytes = 64` and `AliasConflictException`).

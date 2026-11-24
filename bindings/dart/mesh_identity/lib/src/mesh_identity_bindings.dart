@@ -546,6 +546,14 @@ external int mesh_group_handle_from_installation(
   ffi.Pointer<ffi.Pointer<ffi.Void>> outHandle,
 );
 
+@ffi.Native<
+  ffi.Int32 Function(ffi.Pointer<ffi.Void>, ffi.Pointer<ffi.Pointer<ffi.Void>>)
+>()
+external int mesh_group_handle_installation_view(
+  ffi.Pointer<ffi.Void> handle,
+  ffi.Pointer<ffi.Pointer<ffi.Void>> outInstHandle,
+);
+
 @ffi.Native<ffi.Void Function(ffi.Pointer<ffi.Void>)>()
 external void mesh_group_handle_free(ffi.Pointer<ffi.Void> handle);
 

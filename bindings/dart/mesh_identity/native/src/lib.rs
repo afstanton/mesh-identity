@@ -4596,3 +4596,118 @@ pub unsafe extern "C" fn mesh_installation_openpgp_remember_revocations(
         MESH_ERR_PANIC
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn borrowed_view_free_preserves_parent_group_handle() {
+        let seed1 = [0x11u8; 32];
+        let seed2 = [0x22u8; 32];
+        let mut group_ptr: *mut MeshGroupHandle = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { mesh_group_handle_create(seed1.as_ptr(), 32, &mut group_ptr) },
+            MESH_OK
+        );
+        assert!(!group_ptr.is_null());
+
+        let mut view_ptr: *mut MeshInstallationHandle = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { mesh_group_handle_installation_view(group_ptr, &mut view_ptr) },
+            MESH_OK
+        );
+        assert!(!view_ptr.is_null());
+
+        // Mutate via borrowed view, then free ONLY the borrowed view wrapper.
+        let mut out_pk = [0u8; 32];
+        assert_eq!(
+            unsafe {
+                mesh_installation_add_identity(
+                    view_ptr,
+                    seed2.as_ptr(),
+                    32,
+                    out_pk.as_mut_ptr(),
+                    32,
+                )
+            },
+            MESH_OK
+        );
+        unsafe { mesh_installation_free(view_ptr) };
+
+        // Parent MeshGroupHandle remains live and intact.
+        let mut selected_pk = [0u8; 32];
+        assert_eq!(
+            unsafe { mesh_group_handle_selected_identity(group_ptr, selected_pk.as_mut_ptr()) },
+            MESH_OK
+        );
+        assert_eq!(
+            unsafe { mesh_group_handle_installation_view(group_ptr, &mut view_ptr) },
+            MESH_OK
+        );
+        let count = unsafe { mesh_installation_identities_count(view_ptr) };
+        assert_eq!(count, 2);
+
+        unsafe {
+            mesh_installation_free(view_ptr);
+            mesh_group_handle_free(group_ptr);
+        }
+    }
+
+    #[test]
+    fn borrowed_view_free_after_parent_free_is_safe() {
+        let seed = [0x33u8; 32];
+        let mut group_ptr: *mut MeshGroupHandle = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { mesh_group_handle_create(seed.as_ptr(), 32, &mut group_ptr) },
+            MESH_OK
+        );
+
+        let mut view_ptr: *mut MeshInstallationHandle = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { mesh_group_handle_installation_view(group_ptr, &mut view_ptr) },
+            MESH_OK
+        );
+
+        // Simulate out-of-order GC finalization: parent freed BEFORE view wrapper.
+        unsafe {
+            mesh_group_handle_free(group_ptr);
+            mesh_installation_free(view_ptr);
+        }
+    }
+
+    #[test]
+    fn borrowed_view_rejects_ownership_transfer() {
+        let seed = [0x44u8; 32];
+        let mut group_ptr: *mut MeshGroupHandle = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { mesh_group_handle_create(seed.as_ptr(), 32, &mut group_ptr) },
+            MESH_OK
+        );
+
+        let mut view_ptr: *mut MeshInstallationHandle = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { mesh_group_handle_installation_view(group_ptr, &mut view_ptr) },
+            MESH_OK
+        );
+
+        let mut new_group_ptr: *mut MeshGroupHandle = std::ptr::null_mut();
+        assert_eq!(
+            unsafe { mesh_group_handle_from_installation(view_ptr, &mut new_group_ptr) },
+            MESH_ERR_INVALID_ARG
+        );
+        assert!(new_group_ptr.is_null());
+
+        // Both view and parent remain valid after rejected transfer.
+        let mut selected_pk = [0u8; 32];
+        assert_eq!(
+            unsafe { mesh_installation_selected(view_ptr, selected_pk.as_mut_ptr(), 32) },
+            MESH_OK
+        );
+
+        unsafe {
+            mesh_installation_free(view_ptr);
+            mesh_group_handle_free(group_ptr);
+        }
+    }
+}

@@ -372,6 +372,10 @@ class OpenPgpExportPreview implements ffi.Finalizable {
       );
     }
 
+    // Resolve and validate installation handle BEFORE detaching the preview
+    // finalizer so a disposed/poisoned installation never leaks the preview.
+    final instPtr = installation.nativeHandle;
+
     return using((Arena arena) {
       final outCertPtr = arena<ffi.Pointer<ffi.Uint8>>();
       final outCertLen = arena<ffi.Size>();
@@ -386,7 +390,7 @@ class OpenPgpExportPreview implements ffi.Finalizable {
 
       final res = mesh_openpgp_preview_confirm(
         previewPtr,
-        installation.handleForTransfer,
+        instPtr,
         outCertPtr,
         outCertLen,
         outDetachedPtr,

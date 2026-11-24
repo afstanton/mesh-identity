@@ -142,6 +142,12 @@ class MeshInstallation implements ffi.Finalizable {
     }
   }
 
+  /// Native handle for live FFI calls (valid for both owned and borrowed views).
+  ffi.Pointer<ffi.Void> get nativeHandle {
+    _checkDisposed();
+    return _handle;
+  }
+
   /// Native handle used when transferring ownership to [MeshGroupHandle].
   ffi.Pointer<ffi.Void> get handleForTransfer {
     _checkDisposed();

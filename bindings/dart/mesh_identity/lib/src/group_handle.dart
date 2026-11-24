@@ -160,7 +160,8 @@ class MeshGroupHandle implements ffi.Finalizable {
   /// Mutations to personas, contacts, or voting/handoff state on this view are
   /// immediately visible to this [MeshGroupHandle] and included in its snapshots.
   /// The returned view cannot be disposed or transferred independently; its
-  /// lifetime ends when this [MeshGroupHandle] is disposed.
+  /// lifetime ends when this [MeshGroupHandle] is disposed. Both handles must
+  /// only be accessed from a single isolate (no concurrent mutable aliasing).
   MeshInstallation get installation {
     _checkDisposed();
     final existing = _installationView;

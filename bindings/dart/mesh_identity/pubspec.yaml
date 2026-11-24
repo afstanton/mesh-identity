@@ -3,7 +3,7 @@ description: >-
   Pure Dart bindings for mesh-identity: cryptographic peer identity lifecycle,
   contact management, durable snapshot persistence, offline Encounter ceremonies,
   device-to-device handoff, Byzantine group admission governance, and OpenPGP bridge.
-version: 0.5.2
+version: 0.5.3
 repository: https://github.com/afstanton/mesh-identity
 
 environment:

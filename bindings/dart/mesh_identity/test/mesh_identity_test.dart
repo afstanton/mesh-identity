@@ -2531,6 +2531,46 @@ void main() {
         throwsA(isA<DisposedException>()),
       );
     });
+
+    test(
+      'OpenPgpExportPreview.confirm succeeds on borrowed MeshGroupHandle.installation and rejects disposed parent without leaking',
+      () {
+        final groupHandle = MeshGroupHandle(
+          seed: MeshInstallation.generateSeed(),
+        );
+        final doc = Uint8List.fromList(utf8.encode('signed-via-borrowed-view'));
+        final now = DateTime.utc(2026, 6, 1, 12, 0, 0);
+
+        final preview = groupHandle.installation.createOpenPgpPreview(
+          profile: OpenPgpProfile.v4,
+          userId: 'group-member@mesh.org',
+          document: doc,
+          at: now,
+        );
+        final artifacts = preview.confirm(groupHandle.installation);
+        expect(artifacts.certificate, isNotEmpty);
+        expect(artifacts.detachedSignature, isNotEmpty);
+
+        // Confirming against a disposed parent throws DisposedException before
+        // consuming the preview, so preview.dispose() can still clean up safely.
+        final preview2 = groupHandle.installation.createOpenPgpPreview(
+          profile: OpenPgpProfile.v4,
+          userId: 'group-member@mesh.org',
+          document: doc,
+          at: now,
+        );
+        final borrowedView = groupHandle.installation;
+        groupHandle.dispose();
+
+        expect(
+          () => preview2.confirm(borrowedView),
+          throwsA(isA<DisposedException>()),
+        );
+        expect(preview2.isDisposed, isFalse);
+        preview2.dispose();
+        expect(preview2.isDisposed, isTrue);
+      },
+    );
   });
 }
 

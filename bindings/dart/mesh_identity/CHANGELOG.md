@@ -1,3 +1,8 @@
+## 0.5.3
+
+- Fixed `OpenPgpExportPreview.confirm()` failing with `InvalidArgumentsException` on borrowed `MeshGroupHandle.installation` views and prevented native preview handle leaks when `confirm()` is called with a disposed or poisoned installation.
+- Added native FFI lifecycle tests in `native/src/lib.rs` verifying borrowed `MeshInstallationHandle` wrapper disposal order (wrapper before parent, parent before wrapper, and rejected ownership transfer).
+
 ## 0.5.2
 
 - Exposed a safe borrowed `MeshInstallation` view on `MeshGroupHandle` (`groupHandle.installation`) backed by `mesh_group_handle_installation_view` in the FFI bridge, keeping personas, verified contacts, and monotonic voting/handoff state synchronized with group operations and snapshots.

@@ -7,9 +7,10 @@ import 'core/theme.dart';
 import 'features/about/about_view.dart';
 import 'features/contacts/contacts_view.dart';
 import 'features/encounter/camera_qr_scanner_screen.dart';
+import 'features/groups/groups_view.dart';
 import 'features/identity/identity_view.dart';
 import 'features/overview/encounter_home_view.dart';
-import 'features/placeholders/slice_placeholder_view.dart';
+import 'services/group_controller.dart';
 import 'services/identity_controller.dart';
 import 'services/link_launcher.dart';
 import 'services/qr_scanner_service.dart';
@@ -29,6 +30,9 @@ class EncounterApp extends StatefulWidget {
   /// Optional injected identity controller (primarily for testing).
   final IdentityController? controller;
 
+  /// Optional injected group controller (primarily for testing).
+  final GroupController? groupController;
+
   /// Optional injected theme controller (primarily for testing).
   final ThemeController? themeController;
 
@@ -44,6 +48,7 @@ class EncounterApp extends StatefulWidget {
   const EncounterApp({
     super.key,
     this.controller,
+    this.groupController,
     this.themeController,
     this.linkLauncher,
     this.qrScanner,
@@ -57,6 +62,8 @@ class EncounterApp extends StatefulWidget {
 class _EncounterAppState extends State<EncounterApp> {
   late IdentityController _controller;
   late bool _ownsController;
+  late GroupController _groupController;
+  late bool _ownsGroupController;
   late ThemeController _themeController;
   late bool _ownsThemeController;
   late LinkLauncher _linkLauncher;
@@ -70,6 +77,11 @@ class _EncounterAppState extends State<EncounterApp> {
 
     _ownsController = widget.controller == null;
     _controller = widget.controller ?? IdentityController();
+
+    _ownsGroupController = widget.groupController == null;
+    _groupController =
+        widget.groupController ??
+        GroupController(identityController: _controller);
 
     _ownsThemeController = widget.themeController == null;
     _themeController = widget.themeController ?? ThemeController();
@@ -101,6 +113,16 @@ class _EncounterAppState extends State<EncounterApp> {
       if (_controller.status == IdentityStatus.uninitialized) {
         unawaited(_controller.initialize());
       }
+    }
+    if (widget.groupController != oldWidget.groupController ||
+        widget.controller != oldWidget.controller) {
+      if (_ownsGroupController) {
+        _groupController.dispose();
+      }
+      _ownsGroupController = widget.groupController == null;
+      _groupController =
+          widget.groupController ??
+          GroupController(identityController: _controller);
     }
     if (widget.themeController != oldWidget.themeController) {
       if (_ownsThemeController) {
@@ -136,6 +158,9 @@ class _EncounterAppState extends State<EncounterApp> {
   @override
   void dispose() {
     _lifecycleListener?.dispose();
+    if (_ownsGroupController) {
+      _groupController.dispose();
+    }
     if (_ownsController) {
       _controller.dispose();
     }
@@ -161,7 +186,10 @@ class _EncounterAppState extends State<EncounterApp> {
         qrScanner: widget.qrScanner ?? const ZxingQrScannerService(),
       ),
       AppDestination.contacts => ContactsView(controller: _controller),
-      AppDestination.groups => const GroupsPlaceholderView(),
+      AppDestination.groups => GroupsView(
+        identityController: _controller,
+        groupController: _groupController,
+      ),
       AppDestination.identity => IdentityView(controller: _controller),
       AppDestination.about => AboutView(linkLauncher: _linkLauncher),
     };

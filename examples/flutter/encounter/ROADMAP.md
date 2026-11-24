@@ -47,7 +47,7 @@ This roadmap breaks down the development of **Encounter** (`code/mesh-identity/e
   - Persistent device nonce display and voting role indicator (`VotingState`: voting, stopped, gated).
   - Durable outbox handoff bundle generation and receiver handoff acceptance with atomic snapshot updates.
 
-- [ ] **Slice 7: Byzantine Group Admission & Governance UI**
+- [x] **Slice 7: Byzantine Group Admission & Governance UI** *(implemented; multi-device verification pending)*
   - Group formation & authenticated genesis export/import.
   - Verified contact admission vouchers (`invite`, `acceptAuthenticated`).
   - Two-phase commit outbox staging & confirmation (`save(now)` $\to$ `confirmSaved(token)`).

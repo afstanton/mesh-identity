@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:mesh_identity/mesh_identity.dart';
 
+import 'hex_utils.dart';
+
 /// URI prefix used when encoding a signed [HandoffBundle] for transfer.
 const String handoffUriPrefix = 'mesh:handoff:';
 
@@ -65,22 +67,8 @@ String formatGroupedHex(Uint8List bytes) {
   return sb.toString();
 }
 
-Uint8List _parse32ByteHex(String input, String invalidMessage) {
-  var normalized = input.replaceAll(RegExp(r'\s+'), '');
-  if (normalized.startsWith('0x') || normalized.startsWith('0X')) {
-    normalized = normalized.substring(2);
-  }
-  const expectedHexLength = 64;
-  if (normalized.length != expectedHexLength ||
-      !RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(normalized)) {
-    throw FormatException(invalidMessage);
-  }
-  final bytes = Uint8List(32);
-  for (var i = 0; i < 32; i++) {
-    bytes[i] = int.parse(normalized.substring(i * 2, i * 2 + 2), radix: 16);
-  }
-  return bytes;
-}
+Uint8List _parse32ByteHex(String input, String invalidMessage) =>
+    parse32ByteHex(input, invalidMessage: invalidMessage);
 
 /// Parse a 32-byte device nonce from a 64-character hexadecimal string.
 Uint8List parseDeviceNonceHex(String input) => _parse32ByteHex(

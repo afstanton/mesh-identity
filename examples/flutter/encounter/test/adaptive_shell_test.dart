@@ -1,9 +1,11 @@
 import 'package:encounter/core/config.dart';
 import 'package:encounter/features/about/about_view.dart';
 import 'package:encounter/features/contacts/contacts_view.dart';
+import 'package:encounter/features/groups/groups_view.dart';
 import 'package:encounter/features/identity/identity_view.dart';
-import 'package:encounter/features/placeholders/slice_placeholder_view.dart';
 import 'package:encounter/main.dart';
+import 'package:encounter/services/group_controller.dart';
+import 'package:encounter/services/group_outbox.dart';
 import 'package:encounter/services/identity_controller.dart';
 import 'package:encounter/services/keyring_service.dart';
 import 'package:encounter/services/link_launcher.dart';
@@ -57,6 +59,11 @@ void main() {
       (WidgetTester tester) async {
         setViewport(tester, const Size(390, 844));
         final controller = await createReadyController();
+        final groupController = GroupController(
+          identityController: controller,
+          outbox: InMemoryGroupOutboxService(),
+        );
+        addTearDown(groupController.dispose);
         final themeController = ThemeController();
         addTearDown(themeController.dispose);
 
@@ -69,6 +76,7 @@ void main() {
         await tester.pumpWidget(
           EncounterApp(
             controller: controller,
+            groupController: groupController,
             themeController: themeController,
             linkLauncher: FakeLinkLauncher(),
           ),
@@ -102,7 +110,7 @@ void main() {
           ),
         );
         await tester.pumpAndSettle();
-        expect(find.byType(GroupsPlaceholderView), findsOneWidget);
+        expect(find.byType(GroupsView), findsOneWidget);
 
         await tester.tap(
           find.descendant(

@@ -4,7 +4,7 @@ A cross-platform reference and demonstration application for **[`mesh_identity`]
 
 Target Platforms: **iOS**, **Android**, **macOS**, **Windows**, and **Linux** (Web excluded).
 
-> **Current Status**: Core Node, Responsive Shell, In-Person Encounter ceremonies, Contact Governance & Persona Management (Slices 1–4), Hardware Camera QR Scanning implementation (Slice 5, physical-camera device verification pending), and Device-to-Device Handoff & Monotonic Voting Roles (Slice 6, two-device verification pending) are in place. Native integration with `mesh_identity` v0.5.1, transactional keyring + generational snapshot persistence, responsive adaptive shell, macOS HIG menu/toolbar, About screen, isolated single-device Practice Mode, two-device camera/QR/URI encounter verification (valid scanned QR URIs auto-submit into the active ceremony step while 6-digit SAS confirmation remains strictly manual), contact search/alias/block/import UI, multi-persona switching/seed provisioning/removal, and durable monotonic voting-role device handoff are implemented. Byzantine Group Admission is next (Slice 7).
+> **Current Status**: Core Node, Responsive Shell, In-Person Encounter ceremonies, Contact Governance & Persona Management (Slices 1–4), Hardware Camera QR Scanning implementation (Slice 5, physical-camera device verification pending), Device-to-Device Handoff & Monotonic Voting Roles (Slice 6, two-device verification pending), and Byzantine Group Admission & Governance UI (Slice 7, multi-device verification pending) are in place. Native integration with `mesh_identity` v0.5.2, transactional keyring + generational snapshot persistence, responsive adaptive shell, macOS HIG menu/toolbar, About screen, isolated single-device Practice Mode, two-device camera/QR/URI encounter verification (valid scanned QR URIs auto-submit into the active ceremony step while 6-digit SAS confirmation remains strictly manual), contact search/alias/block/import UI, multi-persona switching/seed provisioning/removal, durable monotonic voting-role device handoff, and two-phase commit Byzantine group governance are implemented. Group frames can be up to 128 KiB and are exchanged via copy/paste rather than QR; inbound frames carry native Ed25519 / quorum signatures verified against verified contacts/members, and authenticated genesis import requires an out-of-band 64-hex digest. OpenPGP Interoperability Bridge is next (Slice 8).
 
 ---
 
@@ -12,7 +12,7 @@ Target Platforms: **iOS**, **Android**, **macOS**, **Windows**, and **Linux** (W
 
 | Capability | Status | Description |
 |---|---|---|
-| **Native Integration** | **Complete** | Proven FFI bindings via `mesh_identity` v0.5.1 on pub.dev. |
+| **Native Integration** | **Complete** | Proven FFI bindings via `mesh_identity` v0.5.2 on pub.dev. |
 | **Build-Time Parameterization** | **Complete** | Confidential store IDs via gitignored xcconfig & gradle properties. |
 | **Secure Persistence** | **Complete** | Keychain/Keystore seed storage, envelope framing & generational atomic snapshots. |
 | **Responsive Shell & HIG** | **Complete** | Adaptive bottom bar / navigation rail, themes, and macOS unified toolbar + menu bar. |
@@ -22,8 +22,8 @@ Target Platforms: **iOS**, **Android**, **macOS**, **Windows**, and **Linux** (W
 | **Contacts & Personas UI** | **Complete** | Contact search/filters, detail cards, alias editing, blocking/unblocking, unverified key import, and multi-persona switching (Slice 4). |
 | **Camera QR Scanner** | **Device Check Pending** | Cross-platform camera QR scanning (`flutter_zxing` + `camera_desktop` behind `QrScannerService`) with permissions/entitlements & manual fallback; valid scanned URIs auto-submit while SAS confirmation remains manual (Slice 5). |
 | **Device Handoff** | **Device Check Pending** | Persistent device nonce, monotonic `VotingState` display, durable outbound bundle outbox, `Gated` persona seed import/export (with 30s clipboard auto-clear warning), and inbound inspect/accept handoff (Slice 6). |
-| **Byzantine Groups** | **Next** | Group formation, authenticated genesis, admission vouchers, and two-phase commit outbox (Slice 7). |
-| **OpenPGP & BLE** | **Planned** | OpenPGP export previews/cross-certification and offline BLE transport (Slices 8–9). |
+| **Byzantine Groups** | **Device Check Pending** | Group formation, out-of-band authenticated genesis import, verified contact invitations, two-phase commit outbox, and frame exchange (Slice 7). |
+| **OpenPGP & BLE** | **Next** | OpenPGP export previews/cross-certification and offline BLE transport (Slices 8–9). |
 
 ---
 

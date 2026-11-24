@@ -30,9 +30,22 @@ enum IdentityStatus {
   corrupted,
 }
 
-/// App-level controller managing the single-isolate [MeshInstallation] lifecycle,
-/// persona seed storage, serialized atomic snapshot writes, and delegated
-/// Encounter ceremony coordination.
+/// Result of a two-phase group mutation committed durably on [IdentityController].
+class GroupTwoPhaseCommitResult<T> {
+  final T value;
+  final List<GroupEvent> confirmedEvents;
+  final List<OutgoingMessage> releasedMessages;
+
+  const GroupTwoPhaseCommitResult({
+    required this.value,
+    required this.confirmedEvents,
+    required this.releasedMessages,
+  });
+}
+
+/// App-level controller managing the single-isolate authoritative [MeshGroupHandle]
+/// (and its borrowed [MeshInstallation] view), persona seed storage, serialized
+/// atomic snapshot writes, and delegated Encounter ceremony coordination.
 class IdentityController extends ChangeNotifier {
   final SecureKeyringService _keyring;
   final SnapshotStorageService _storage;
@@ -40,9 +53,15 @@ class IdentityController extends ChangeNotifier {
   final DateTime Function() _clock;
   late final EncounterCoordinator _encounter;
 
-  MeshInstallation? _installation;
+  MeshGroupHandle? _groupHandle;
   IdentityStatus _status = IdentityStatus.uninitialized;
   String? _errorMessage;
+
+  MeshInstallation? get _installation {
+    final handle = _groupHandle;
+    if (handle == null || handle.isDisposed) return null;
+    return handle.installation;
+  }
 
   Uint8List? _cachedSelectedIdentity;
   List<Uint8List> _cachedIdentities = const [];
@@ -57,9 +76,17 @@ class IdentityController extends ChangeNotifier {
   String? _outboxLoadError;
 
   Future<void> _queue = Future<void>.value();
+  Future<void> Function()? _beforePersistHook;
   bool _isDisposed = false;
   bool _hasPendingChanges = false;
   int _lastNowMs = 0;
+
+  /// Register an optional hook invoked before any identity-level snapshot write
+  /// so [GroupController] can flush any unsaved post-commit outbox frames
+  /// before overwriting the on-disk snapshot.
+  void setBeforePersistHook(Future<void> Function()? hook) {
+    _beforePersistHook = hook;
+  }
 
   IdentityController({
     SecureKeyringService? keyring,
@@ -78,7 +105,10 @@ class IdentityController extends ChangeNotifier {
   }
 
   IdentityStatus get status => _status;
-  bool get isReady => _status == IdentityStatus.ready && _installation != null;
+  bool get isReady =>
+      _status == IdentityStatus.ready &&
+      _groupHandle != null &&
+      !_groupHandle!.isDisposed;
   bool get isDisposed => _isDisposed;
   String? get errorMessage => _errorMessage;
   EncounterSessionState get encounterSession => _encounter.session;
@@ -94,10 +124,11 @@ class IdentityController extends ChangeNotifier {
   }
 
   void _disposeInstallationAndCeremony() {
-    // Dispose installation before ceremony so EncounterCeremony.dispose() never
-    // invokes native cancel with wall-clock time during teardown or rollback.
-    _installation?.dispose();
-    _installation = null;
+    // Dispose group handle (which invalidates its borrowed installation view)
+    // before ceremony teardown so EncounterCeremony.dispose() never invokes
+    // native cancel with wall-clock time during teardown or rollback.
+    _groupHandle?.dispose();
+    _groupHandle = null;
     _encounter.disposeCeremonyHandleOnly();
   }
 
@@ -186,16 +217,20 @@ class IdentityController extends ChangeNotifier {
     return completer.future;
   }
 
-  MeshInstallation _requireInstallation() {
+  MeshGroupHandle _requireGroupHandle() {
     if (_isDisposed) {
       throw StateError('IdentityController has been disposed');
     }
-    final inst = _installation;
-    if (inst == null || _status != IdentityStatus.ready) {
+    final handle = _groupHandle;
+    if (handle == null ||
+        _status != IdentityStatus.ready ||
+        handle.isDisposed) {
       throw StateError('IdentityController is not ready (status: $_status)');
     }
-    return inst;
+    return handle;
   }
+
+  MeshInstallation _requireInstallation() => _requireGroupHandle().installation;
 
   void _ensureNoActiveEncounter() {
     if (_encounter.hasActiveCeremony) {
@@ -329,16 +364,32 @@ class IdentityController extends ChangeNotifier {
 
       final SnapshotEnvelope envelope;
       final List<Uint8List> seeds;
-      MeshInstallation? restored;
+      MeshGroupHandle? restored;
       try {
         envelope = SnapshotEnvelope.decode(bytes);
         seeds = await _loadSeedsForKeys(envelope.identityKeys);
         try {
           if (_isDisposed) return;
-          restored = MeshInstallation.restore(
-            snapshotBytes: envelope.snapshotBytes,
-            signingKeySeeds: seeds,
-          );
+          try {
+            restored = MeshGroupHandle.restore(
+              snapshotBlob: envelope.snapshotBytes,
+              signingKeySeeds: seeds,
+            );
+          } on InvalidSnapshotException {
+            // Backward-compatible upgrade for pre-Slice-7 bare installation snapshots.
+            final legacyInst = MeshInstallation.restore(
+              snapshotBytes: envelope.snapshotBytes,
+              signingKeySeeds: seeds,
+            );
+            restored = MeshGroupHandle.fromInstallation(legacyInst);
+          } on MalformedGroupException {
+            // Backward-compatible upgrade for pre-Slice-7 bare installation snapshots.
+            final legacyInst = MeshInstallation.restore(
+              snapshotBytes: envelope.snapshotBytes,
+              signingKeySeeds: seeds,
+            );
+            restored = MeshGroupHandle.fromInstallation(legacyInst);
+          }
         } finally {
           for (final seed in seeds) {
             seed.fillRange(0, seed.length, 0);
@@ -364,12 +415,12 @@ class IdentityController extends ChangeNotifier {
         restored.dispose();
         return;
       }
-      _installation = restored;
+      _groupHandle = restored;
       _status = IdentityStatus.ready;
       _hasPendingChanges = false;
       _syncCachedView();
 
-      await _loadAndPrunePendingOutboundHandoffs(restored);
+      await _loadAndPrunePendingOutboundHandoffs(restored.installation);
 
       // Best-effort prune orphan keyring keys left behind by a crashed transaction.
       await _pruneOrphanKeys(
@@ -390,37 +441,39 @@ class IdentityController extends ChangeNotifier {
 
   Future<void> _initializeFreshNode() async {
     final initialSeed = MeshInstallation.generateSeed();
-    MeshInstallation? inst;
+    MeshGroupHandle? handle;
     Uint8List? primaryKey;
 
     try {
-      inst = MeshInstallation(seed: initialSeed);
-      primaryKey = inst.selectedIdentity;
+      handle = MeshGroupHandle(seed: initialSeed);
+      primaryKey = handle.selectedIdentity;
 
       await _keyring.saveSeed(primaryKey, initialSeed);
       if (_isDisposed) {
-        inst.dispose();
+        handle.dispose();
         return;
       }
 
+      final saved = handle.save(at: _now());
       final encoded = SnapshotEnvelope.encode(
-        identityKeys: [primaryKey],
-        snapshotBytes: inst.save(at: _now()),
+        identityKeys: handle.installation.identities,
+        snapshotBytes: saved.blob,
       );
       await _storage.saveSnapshot(encoded);
+      handle.confirmSaved(saved.token);
       if (_isDisposed) {
-        inst.dispose();
+        handle.dispose();
         return;
       }
 
-      _installation = inst;
-      inst = null;
+      _groupHandle = handle;
+      handle = null;
       _status = IdentityStatus.ready;
       _hasPendingChanges = false;
       _syncCachedView();
       _notifySafely();
     } catch (e) {
-      inst?.dispose();
+      handle?.dispose();
       if (primaryKey != null) {
         try {
           await _keyring.removeSeed(primaryKey);
@@ -479,11 +532,18 @@ class IdentityController extends ChangeNotifier {
   }
 
   /// Persist the latest framed snapshot atomically. Must be called inside [_serialized].
-  Future<void> _persistSnapshotInternal({DateTime? at}) async {
-    final inst = _requireInstallation();
+  Future<void> _persistSnapshotInternal({
+    DateTime? at,
+    bool runBeforePersistHook = true,
+  }) async {
+    if (runBeforePersistHook && _beforePersistHook != null) {
+      await _beforePersistHook!();
+    }
+    final handle = _requireGroupHandle();
+    final saved = handle.save(at: at ?? _now());
     final encoded = SnapshotEnvelope.encode(
-      identityKeys: inst.identities,
-      snapshotBytes: inst.save(at: at ?? _now()),
+      identityKeys: handle.installation.identities,
+      snapshotBytes: saved.blob,
     );
     await _storage.saveSnapshot(encoded);
     _hasPendingChanges = false;
@@ -497,11 +557,11 @@ class IdentityController extends ChangeNotifier {
     final hadActiveEncounter = _encounter.hasActiveCeremony;
     try {
       final seeds = await _loadSeedsForKeys(prevKeys);
-      MeshInstallation? restored;
+      MeshGroupHandle? restored;
       try {
         if (_isDisposed) return;
-        restored = MeshInstallation.restore(
-          snapshotBytes: prevSnapshotBytes,
+        restored = MeshGroupHandle.restore(
+          snapshotBlob: prevSnapshotBytes,
           signingKeySeeds: seeds,
         );
       } finally {
@@ -514,7 +574,7 @@ class IdentityController extends ChangeNotifier {
         return;
       }
       _disposeInstallationAndCeremony();
-      _installation = restored;
+      _groupHandle = restored;
       _hasPendingChanges = false;
       _syncCachedView();
       if (hadActiveEncounter) {
@@ -536,10 +596,11 @@ class IdentityController extends ChangeNotifier {
   Future<T> _transactionalMutate<T>(
     FutureOr<T> Function(MeshInstallation inst) mutate,
   ) async {
-    final inst = _requireInstallation();
+    final handle = _requireGroupHandle();
+    final inst = handle.installation;
     final now = _now();
     final prevKeys = inst.identities;
-    final prevSnapshotBytes = inst.save(at: now);
+    final prevSnapshotBytes = handle.save(at: now).blob;
 
     final T result;
     try {
@@ -618,7 +679,7 @@ class IdentityController extends ChangeNotifier {
   }) async {
     final prevKeys = gateAfterImport ? inst.identities : const <Uint8List>[];
     final prevSnapshotBytes = gateAfterImport
-        ? inst.save(at: _now())
+        ? _requireGroupHandle().save(at: _now()).blob
         : Uint8List(0);
     Uint8List? newKey;
     var seedSaved = false;
@@ -679,10 +740,11 @@ class IdentityController extends ChangeNotifier {
   /// keyring so a write failure or crash never leaves a missing seed reference.
   Future<void> removePersona(Uint8List identityKey) {
     return _serialized(() async {
-      final inst = _requireInstallation();
+      final handle = _requireGroupHandle();
+      final inst = handle.installation;
       _ensureNoActiveEncounter();
       final prevKeys = inst.identities;
-      final prevSnapshotBytes = inst.save(at: _now());
+      final prevSnapshotBytes = handle.save(at: _now()).blob;
 
       try {
         inst.removeIdentity(identityKey);
@@ -851,11 +913,12 @@ class IdentityController extends ChangeNotifier {
         );
       }
 
+      final handle = _requireGroupHandle();
       final activePersona = Uint8List.fromList(inst.selectedIdentity);
       final activeHex = _bytesToHex(activePersona);
       final now = _now();
       final prevKeys = inst.identities;
-      final prevSnapshotBytes = inst.save(at: now);
+      final prevSnapshotBytes = handle.save(at: now).blob;
 
       final HandoffResult result;
       var outboxSaved = false;
@@ -866,12 +929,7 @@ class IdentityController extends ChangeNotifier {
           result.bundle.rawBytes,
         );
         outboxSaved = true;
-        final encoded = SnapshotEnvelope.encode(
-          identityKeys: inst.identities,
-          snapshotBytes: result.snapshotBytes,
-        );
-        await _storage.saveSnapshot(encoded);
-        _hasPendingChanges = false;
+        await _persistSnapshotInternal(at: now);
       } catch (_) {
         if (outboxSaved) {
           try {
@@ -903,21 +961,17 @@ class IdentityController extends ChangeNotifier {
     return _serialized(() async {
       final inst = _requireInstallation();
       _ensureNoActiveEncounter();
+      final handle = _requireGroupHandle();
       final targetPersona = Uint8List.fromList(bundle.identity);
       final targetHex = _bytesToHex(targetPersona);
       final now = _now();
       final prevKeys = inst.identities;
-      final prevSnapshotBytes = inst.save(at: now);
+      final prevSnapshotBytes = handle.save(at: now).blob;
 
       final AcceptHandoffResult result;
       try {
         result = inst.acceptHandoff(bundle, at: now);
-        final encoded = SnapshotEnvelope.encode(
-          identityKeys: inst.identities,
-          snapshotBytes: result.snapshotBytes,
-        );
-        await _storage.saveSnapshot(encoded);
-        _hasPendingChanges = false;
+        await _persistSnapshotInternal(at: now);
       } catch (_) {
         await _rollbackInstallation(prevSnapshotBytes, prevKeys);
         rethrow;
@@ -1055,6 +1109,80 @@ class IdentityController extends ChangeNotifier {
     });
   }
 
+  /// Synchronously read group state from the authoritative [MeshGroupHandle].
+  T readGroupState<T>(T Function(MeshGroupHandle handle) reader) {
+    final handle = _requireGroupHandle();
+    return reader(handle);
+  }
+
+  /// Execute a two-phase group mutation on the authoritative [MeshGroupHandle],
+  /// persisting the unified snapshot atomically BEFORE calling `confirmSaved`
+  /// and draining released outgoing frames.
+  ///
+  /// Rejects with [CeremonyActiveException] if an encounter ceremony is active.
+  Future<GroupTwoPhaseCommitResult<T>> runGroupTwoPhase<T>(
+    T Function(MeshGroupHandle handle) mutate, {
+    required DateTime at,
+  }) {
+    return _serialized(() async {
+      final handle = _requireGroupHandle();
+      _ensureNoActiveEncounter();
+      final prevKeys = handle.installation.identities;
+      final prevBlob = handle.save(at: at).blob;
+
+      final T result;
+      final GroupSaveResult saved;
+      try {
+        result = mutate(handle);
+        saved = handle.save(at: at);
+        final encoded = SnapshotEnvelope.encode(
+          identityKeys: handle.installation.identities,
+          snapshotBytes: saved.blob,
+        );
+        await _storage.saveSnapshot(encoded);
+        _hasPendingChanges = false;
+      } catch (_) {
+        await _rollbackInstallation(prevBlob, prevKeys);
+        rethrow;
+      }
+
+      final confirmedEvents = handle.confirmSaved(saved.token);
+      final released = handle.takeOutgoing();
+      if (!_isDisposed) {
+        _syncCachedView();
+        _notifySafely();
+      }
+      return GroupTwoPhaseCommitResult<T>(
+        value: result,
+        confirmedEvents: confirmedEvents,
+        releasedMessages: released,
+      );
+    });
+  }
+
+  /// Persist a clean post-outbox checkpoint of the authoritative [MeshGroupHandle]
+  /// so already-persisted outgoing frames are not re-staged on future restarts.
+  Future<void> checkpointGroupSnapshot({required DateTime at}) {
+    return _serialized(() async {
+      if (_isDisposed || !isReady) return;
+      await _persistSnapshotInternal(at: at, runBeforePersistHook: false);
+    });
+  }
+
+  /// Drain any re-staged outgoing frames from the restored [MeshGroupHandle]
+  /// (e.g. after a crash or outbox write failure between `confirmSaved` and
+  /// durable outbox persistence).
+  Future<List<OutgoingMessage>> recoverStagedGroupOutgoing({
+    required DateTime at,
+  }) {
+    return _serialized(() async {
+      final handle = _requireGroupHandle();
+      final saved = handle.save(at: at);
+      handle.confirmSaved(saved.token);
+      return handle.takeOutgoing();
+    });
+  }
+
   @override
   void dispose() {
     if (_isDisposed) return;
@@ -1096,14 +1224,14 @@ class _IdentityEncounterHost implements EncounterHost {
       _controller._persistSnapshotInternal(at: at);
 
   @override
+  Uint8List captureRollbackSnapshot(DateTime at) =>
+      _controller._requireGroupHandle().save(at: at).blob;
+
+  @override
   Future<void> rollbackInstallation(
     Uint8List prevSnapshotBytes,
     List<Uint8List> prevKeys,
   ) => _controller._rollbackInstallation(prevSnapshotBytes, prevKeys);
-
-  @override
-  Future<void> saveEncodedSnapshot(Uint8List encodedEnvelope) =>
-      _controller._storage.saveSnapshot(encodedEnvelope);
 
   @override
   void markPendingChanges() => _controller._hasPendingChanges = true;

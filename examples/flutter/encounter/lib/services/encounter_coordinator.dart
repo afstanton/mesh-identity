@@ -3,7 +3,6 @@ import 'dart:typed_data';
 import 'package:mesh_identity/mesh_identity.dart';
 
 import 'encounter_session.dart';
-import 'snapshot_envelope.dart';
 
 /// Host contract providing serialized execution, installation lifecycle,
 /// persistence, and change notifications to [EncounterCoordinator].
@@ -15,11 +14,11 @@ abstract interface class EncounterHost {
   bool get isReady;
   bool get isDisposed;
   Future<void> persistSnapshot(DateTime at);
+  Uint8List captureRollbackSnapshot(DateTime at);
   Future<void> rollbackInstallation(
     Uint8List prevSnapshotBytes,
     List<Uint8List> prevKeys,
   );
-  Future<void> saveEncodedSnapshot(Uint8List encodedEnvelope);
   void markPendingChanges();
   void clearPendingChanges();
   void syncCachedView();
@@ -152,18 +151,10 @@ class EncounterCoordinator {
     final inst = _host.installation;
     if (inst != null && !inst.isDisposed && _host.isReady) {
       try {
-        // inst.save(at: now) invokes native Installation::expire(now),
+        // persistSnapshot(now) invokes native Installation::expire(now),
         // clearing self.ceremony and recording any incomplete response state.
-        final encoded = SnapshotEnvelope.encode(
-          identityKeys: inst.identities,
-          snapshotBytes: inst.save(at: now),
-        );
-        try {
-          await _host.saveEncodedSnapshot(encoded);
-          _host.clearPendingChanges();
-        } catch (_) {
-          _host.markPendingChanges();
-        }
+        await _host.persistSnapshot(now);
+        _host.clearPendingChanges();
       } catch (_) {
         _host.markPendingChanges();
       }
@@ -296,7 +287,7 @@ class EncounterCoordinator {
 
       final inst = _host.requireInstallation();
       final prevKeys = inst.identities;
-      final prevSnapshotBytes = inst.save(at: now);
+      final prevSnapshotBytes = _host.captureRollbackSnapshot(now);
 
       final Uint8List responseBytes;
       try {
@@ -381,7 +372,7 @@ class EncounterCoordinator {
 
       final inst = _host.requireInstallation();
       final prevKeys = inst.identities;
-      final prevSnapshotBytes = inst.save(at: now);
+      final prevSnapshotBytes = _host.captureRollbackSnapshot(now);
 
       final Uint8List revealBytes;
       final EncounterComparison? comparison;
@@ -550,7 +541,7 @@ class EncounterCoordinator {
       final peerCode = int.parse(trimmed);
       final inst = _host.requireInstallation();
       final prevKeys = inst.identities;
-      final prevSnapshotBytes = inst.save(at: now);
+      final prevSnapshotBytes = _host.captureRollbackSnapshot(now);
 
       final Contact contact;
       try {

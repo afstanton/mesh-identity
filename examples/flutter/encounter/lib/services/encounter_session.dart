@@ -2,6 +2,8 @@ import 'dart:typed_data';
 
 import 'package:mesh_identity/mesh_identity.dart';
 
+import 'hex_utils.dart';
+
 /// Role assumed by this device in an in-person Encounter ceremony.
 enum EncounterRole {
   /// Initiator: generates QR 1 Offer, scans QR 2 Response, emits QR 3 Reveal,
@@ -251,21 +253,7 @@ String formatCountdown(Duration duration) {
 ///
 /// Ignores surrounding whitespace and optional `0x` prefix. Throws a
 /// [FormatException] if the input is not 64 valid hexadecimal characters.
-Uint8List parseHexPublicKey(String input) {
-  var normalized = input.replaceAll(RegExp(r'\s+'), '');
-  if (normalized.startsWith('0x') || normalized.startsWith('0X')) {
-    normalized = normalized.substring(2);
-  }
-  const expectedHexLength = 64;
-  if (normalized.length != expectedHexLength ||
-      !RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(normalized)) {
-    throw const FormatException(
-      'Enter a 64-character hexadecimal Ed25519 public key.',
-    );
-  }
-  final bytes = Uint8List(32);
-  for (var i = 0; i < 32; i++) {
-    bytes[i] = int.parse(normalized.substring(i * 2, i * 2 + 2), radix: 16);
-  }
-  return bytes;
-}
+Uint8List parseHexPublicKey(String input) => parse32ByteHex(
+  input,
+  invalidMessage: 'Enter a 64-character hexadecimal Ed25519 public key.',
+);

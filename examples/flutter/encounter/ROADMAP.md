@@ -57,6 +57,6 @@ This roadmap breaks down the development of **Encounter** (`code/mesh-identity/e
   - Export preview screen with statutory privacy disclosure warnings.
   - Peer cross-certification signature generation and secret key import with seed recovery.
 
-- [ ] **Slice 9: Bluetooth Low Energy (BLE) Transport**
+- [x] **Slice 9: Bluetooth Low Energy (BLE) Transport** *(implemented; physical-hardware verification pending)*
   - Offline BLE advertisement & GATT characteristic exchange for Encounter ceremony payloads ($\le 512$ bytes).
   - Proximity indicator and seamless handover to SAS 6-digit confirmation screen.

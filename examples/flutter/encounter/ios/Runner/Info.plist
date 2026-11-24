@@ -51,6 +51,10 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Encounter uses the camera to scan in-person peer QR codes during offline key verification.</string>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>Encounter uses Bluetooth Low Energy to exchange offline verification payloads with nearby peers.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>Encounter uses Bluetooth Low Energy to exchange offline verification payloads with nearby peers.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

@@ -1,11 +1,15 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:material_ui/material_ui.dart';
+import 'package:mesh_identity/mesh_identity.dart';
 
+import '../../services/ble_encounter_transport.dart';
 import '../../services/encounter_session.dart';
 import '../../services/identity_controller.dart';
 import '../../services/qr_scanner_service.dart';
 import 'camera_qr_scanner_screen.dart';
+import 'widgets/ble_encounter_panel.dart';
 import 'widgets/encounter_payload_input.dart';
 import 'widgets/encounter_qr_view.dart';
 import 'widgets/sas_confirmation_panel.dart';
@@ -17,12 +21,14 @@ class TwoDeviceEncounterScreen extends StatefulWidget {
   final IdentityController controller;
   final EncounterRole initialRole;
   final QrScannerService qrScanner;
+  final BleEncounterTransport? bleTransport;
 
   const TwoDeviceEncounterScreen({
     super.key,
     required this.controller,
     required this.initialRole,
     this.qrScanner = const ZxingQrScannerService(),
+    this.bleTransport,
   });
 
   @override
@@ -33,14 +39,139 @@ class TwoDeviceEncounterScreen extends StatefulWidget {
 class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen> {
   Timer? _ticker;
   late EncounterRole _currentRole;
+  late final BleEncounterTransport _bleTransport;
+  late final bool _ownsBleTransport;
+  StreamSubscription<BleTransportStatus>? _bleStatusSub;
+  StreamSubscription<List<BlePeerDiscovery>>? _blePeersSub;
+  BleTransportStatus _bleStatus = BleTransportStatus.idle;
+  List<BlePeerDiscovery> _blePeers = const [];
 
   @override
   void initState() {
     super.initState();
     _currentRole = widget.initialRole;
+    _ownsBleTransport = widget.bleTransport == null;
+    _bleTransport = widget.bleTransport ?? BluetoothLowEnergyTransport();
+    _bleStatus = _bleTransport.status;
+    _bleStatusSub = _bleTransport.statusStream.listen((next) {
+      if (!mounted) return;
+      setState(() => _bleStatus = next);
+    });
+    _blePeersSub = _bleTransport.discoveredPeersStream.listen((peers) {
+      if (!mounted) return;
+      setState(() => _blePeers = peers);
+    });
+    widget.controller.addListener(_onControllerChanged);
+
     _ticker = Timer.periodic(const Duration(seconds: 1), _onTick);
     if (!widget.controller.hasActiveEncounter) {
       _startCeremony(_currentRole);
+    }
+  }
+
+  void _onControllerChanged() {
+    final phase = widget.controller.encounterSession.phase;
+    final isTerminalAbort =
+        phase == EncounterPhase.verified ||
+        phase == EncounterPhase.cancelled ||
+        phase == EncounterPhase.expired ||
+        phase == EncounterPhase.failed ||
+        phase == EncounterPhase.rateLimited;
+    final isSasHandover =
+        phase == EncounterPhase.initiatorShowingRevealAndCompare ||
+        phase == EncounterPhase.responderAwaitingConfirmation;
+    final isActiveAny =
+        _bleStatus == BleTransportStatus.advertising ||
+        _bleStatus == BleTransportStatus.scanning ||
+        _bleStatus == BleTransportStatus.connecting ||
+        _bleStatus == BleTransportStatus.exchanging;
+    final isIdleDiscoverable =
+        _bleStatus == BleTransportStatus.advertising ||
+        _bleStatus == BleTransportStatus.scanning;
+
+    if ((isTerminalAbort && isActiveAny) ||
+        (isSasHandover && isIdleDiscoverable)) {
+      unawaited(_bleTransport.stop());
+    }
+  }
+
+  Future<void> _toggleBle(
+    EncounterSessionState session,
+    EncounterRole role,
+  ) async {
+    try {
+      if (_bleStatus == BleTransportStatus.advertising ||
+          _bleStatus == BleTransportStatus.scanning) {
+        await _bleTransport.stop();
+        return;
+      }
+      if (role == EncounterRole.initiator) {
+        final offerUri = session.outgoingUri;
+        if (offerUri == null) return;
+        final offerBytes = Uint8List.fromList(QrTransport.decodeUri(offerUri));
+        await _bleTransport.startInitiatorPeripheral(
+          offerBytes: offerBytes,
+          onResponseReceived: (responseBytes) async {
+            await widget.controller.submitEncounterResponse(
+              QrTransport.encodeUri(responseBytes),
+            );
+            final updated = widget.controller.encounterSession;
+            final revealUri = updated.outgoingUri;
+            if (updated.phase !=
+                    EncounterPhase.initiatorShowingRevealAndCompare ||
+                revealUri == null) {
+              throw StateError(
+                updated.inlineError ?? 'Response payload was rejected.',
+              );
+            }
+            return Uint8List.fromList(QrTransport.decodeUri(revealUri));
+          },
+        );
+      } else {
+        await _bleTransport.startResponderScan();
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('BLE action failed: $e')));
+    }
+  }
+
+  Future<void> _connectBlePeer(BlePeerDiscovery peer) async {
+    try {
+      await _bleTransport.connectAndExchangeAsResponder(
+        peerId: peer.id,
+        onOfferReceived: (offerBytes) async {
+          await widget.controller.submitEncounterOffer(
+            QrTransport.encodeUri(offerBytes),
+          );
+          final updated = widget.controller.encounterSession;
+          final responseUri = updated.outgoingUri;
+          if (updated.phase != EncounterPhase.responderShowingResponse ||
+              responseUri == null) {
+            throw StateError(
+              updated.inlineError ?? 'Offer payload was rejected.',
+            );
+          }
+          return Uint8List.fromList(QrTransport.decodeUri(responseUri));
+        },
+        onRevealReceived: (revealBytes) async {
+          await widget.controller.submitEncounterReveal(
+            QrTransport.encodeUri(revealBytes),
+          );
+          final updated = widget.controller.encounterSession;
+          if (updated.phase != EncounterPhase.responderAwaitingConfirmation ||
+              updated.comparison == null) {
+            throw StateError(
+              updated.inlineError ?? 'Reveal payload was rejected.',
+            );
+          }
+        },
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('BLE connection failed: $e')));
     }
   }
 
@@ -73,6 +204,14 @@ class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen> {
   @override
   void dispose() {
     _ticker?.cancel();
+    _bleStatusSub?.cancel();
+    _blePeersSub?.cancel();
+    widget.controller.removeListener(_onControllerChanged);
+    if (_ownsBleTransport) {
+      _bleTransport.dispose();
+    } else {
+      unawaited(_bleTransport.stop());
+    }
     if (!widget.controller.isDisposed && widget.controller.hasActiveEncounter) {
       unawaited(widget.controller.cancelActiveEncounter());
     }
@@ -207,6 +346,15 @@ class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen> {
                   'then paste back their Response URI below.',
             ),
             const SizedBox(height: 16),
+            BleEncounterPanel(
+              role: role,
+              transport: _bleTransport,
+              status: _bleStatus,
+              discoveredPeers: _blePeers,
+              onToggleBle: () => unawaited(_toggleBle(session, role)),
+              onConnectPeer: (peer) => unawaited(_connectBlePeer(peer)),
+            ),
+            const SizedBox(height: 16),
             EncounterPayloadCard(
               title: 'Step 1: Your Offer Payload (QR 1)',
               subtitle: 'Share this QR code or payload URI with your peer.',
@@ -249,6 +397,15 @@ class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen> {
               subtitle: 'Ask your peer to tap "Start Encounter" and send or show their Offer URI.',
             ),
             const SizedBox(height: 16),
+            BleEncounterPanel(
+              role: role,
+              transport: _bleTransport,
+              status: _bleStatus,
+              discoveredPeers: _blePeers,
+              onToggleBle: () => unawaited(_toggleBle(session, role)),
+              onConnectPeer: (peer) => unawaited(_connectBlePeer(peer)),
+            ),
+            const SizedBox(height: 16),
             EncounterPayloadInput(
               key: const ValueKey('responder_offer_input'),
               title: 'Step 1: Paste Peer\'s Offer Payload (QR 1)',
@@ -283,6 +440,15 @@ class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen> {
               subtitle:
                   'Give your Response URI below to your peer, then paste back '
                   'their Reveal URI to unlock the 6-digit verification code.',
+            ),
+            const SizedBox(height: 16),
+            BleEncounterPanel(
+              role: role,
+              transport: _bleTransport,
+              status: _bleStatus,
+              discoveredPeers: _blePeers,
+              onToggleBle: () => unawaited(_toggleBle(session, role)),
+              onConnectPeer: (peer) => unawaited(_connectBlePeer(peer)),
             ),
             const SizedBox(height: 16),
             EncounterPayloadCard(
@@ -327,6 +493,15 @@ class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen> {
               subtitle:
                   'Share your Reveal URI with your peer so they see their 6-digit code, '
                   'then verify every digit in person before confirming.',
+            ),
+            const SizedBox(height: 16),
+            BleEncounterPanel(
+              role: role,
+              transport: _bleTransport,
+              status: _bleStatus,
+              discoveredPeers: _blePeers,
+              onToggleBle: () => unawaited(_toggleBle(session, role)),
+              onConnectPeer: (peer) => unawaited(_connectBlePeer(peer)),
             ),
             const SizedBox(height: 16),
             EncounterPayloadCard(

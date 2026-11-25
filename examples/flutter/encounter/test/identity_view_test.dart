@@ -167,6 +167,16 @@ void main() {
       expect(find.text('0 / 64 characters'), findsOneWidget);
       await tester.enterText(
         find.byKey(const Key('import_persona_seed_field')),
+        'abcgz',
+      );
+      await tester.pump();
+      expect(
+        find.text('5 / 64 characters · only 0–9 and a–f allowed'),
+        findsOneWidget,
+      );
+
+      await tester.enterText(
+        find.byKey(const Key('import_persona_seed_field')),
         'abcd',
       );
       await tester.pump();

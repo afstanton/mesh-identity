@@ -712,10 +712,12 @@ class _ImportPersonaSeedDialogState extends State<_ImportPersonaSeedDialog> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-    final normalizedLen = _seedController.text
+    final normalized = _seedController.text
         .replaceAll(RegExp(r'\s+'), '')
-        .replaceFirst(RegExp(r'^0[xX]'), '')
-        .length;
+        .replaceFirst(RegExp(r'^0[xX]'), '');
+    final hasInvalidHex =
+        normalized.isNotEmpty &&
+        !RegExp(r'^[0-9a-fA-F]+$').hasMatch(normalized);
     return AlertDialog(
       title: const Text('Import Backup Key'),
       content: SizedBox(
@@ -741,7 +743,15 @@ class _ImportPersonaSeedDialogState extends State<_ImportPersonaSeedDialog> {
               decoration: InputDecoration(
                 labelText: 'Backup Key (64 hex chars)',
                 border: const OutlineInputBorder(),
-                helperText: '$normalizedLen / 64 characters',
+                helperText: hasInvalidHex
+                    ? '${normalized.length} / 64 characters · only 0–9 and a–f allowed'
+                    : '${normalized.length} / 64 characters',
+                helperStyle: hasInvalidHex
+                    ? theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.error,
+                      )
+                    : null,
+                helperMaxLines: 2,
                 errorText: _errorMessage,
                 errorMaxLines: 2,
               ),

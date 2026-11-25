@@ -50,21 +50,27 @@ class AdaptiveShell extends StatelessWidget {
     final extendedRail = width >= extendedRailBreakpoint;
 
     if (!useRail) {
+      final platform = Theme.of(context).platform;
+      final isApple =
+          platform == TargetPlatform.iOS || platform == TargetPlatform.macOS;
       return Scaffold(
         appBar: AppBar(
           title: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            crossAxisAlignment: isApple
+                ? CrossAxisAlignment.center
+                : CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(selectedDestination.label, overflow: TextOverflow.ellipsis),
               if (activePersonaFingerprint != null)
                 Text(
                   activePersonaFingerprint!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: AppTheme.monospaceStyle(context).copyWith(
                     fontSize: 12,
                     color: Theme.of(context).colorScheme.onSurfaceVariant,
                   ),
-                  overflow: TextOverflow.ellipsis,
                 ),
             ],
           ),

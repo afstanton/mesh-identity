@@ -79,6 +79,9 @@ void main() {
       expect(find.text('0 contacts'), findsOneWidget);
 
       // Switch to second persona
+      ScaffoldMessenger.of(tester.element(find.byType(IdentityView)))
+          .clearSnackBars();
+      await tester.pumpAndSettle();
       await tester.ensureVisible(find.byKey(Key('switch_persona_$secondHex')));
       await tester.tap(find.byKey(Key('switch_persona_$secondHex')));
       await tester.pumpAndSettle();

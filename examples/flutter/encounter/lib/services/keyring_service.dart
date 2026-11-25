@@ -56,6 +56,7 @@ Uint8List? _tryHexToBytes32(String? hex) {
 class FlutterSecureKeyringService implements SecureKeyringService {
   final FlutterSecureStorage _storage;
   final FlutterSecureStorage? _legacyMacOsStorage;
+  final Future<Directory> Function() _debugFallbackDirectory;
   static const String _prefix = 'persona_seed_';
 
   static const String _debugFallbackFileName = 'debug_keyring_fallback.json';
@@ -71,6 +72,7 @@ class FlutterSecureKeyringService implements SecureKeyringService {
   FlutterSecureKeyringService({
     FlutterSecureStorage? storage,
     FlutterSecureStorage? legacyMacOsStorage,
+    Future<Directory> Function()? debugFallbackDirectory,
   }) : _storage =
            storage ??
            const FlutterSecureStorage(
@@ -95,7 +97,9 @@ class FlutterSecureKeyringService implements SecureKeyringService {
                ? const FlutterSecureStorage(
                    mOptions: MacOsOptions(usesDataProtectionKeychain: false),
                  )
-               : null);
+               : null),
+       _debugFallbackDirectory =
+           debugFallbackDirectory ?? getApplicationSupportDirectory;
 
   static bool _isMacOsKeychainAccessError(Object error) {
     if (!Platform.isMacOS || !kDebugMode) return false;
@@ -107,7 +111,7 @@ class FlutterSecureKeyringService implements SecureKeyringService {
   }
 
   Future<File> _debugFallbackFile() async {
-    final dir = await getApplicationSupportDirectory();
+    final dir = await _debugFallbackDirectory();
     if (!await dir.exists()) {
       await dir.create(recursive: true);
     }
@@ -173,7 +177,17 @@ class FlutterSecureKeyringService implements SecureKeyringService {
           }
           await file.delete();
         }
-      } catch (_) {
+      } catch (e) {
+        if (_isMacOsKeychainAccessError(e)) {
+          _useDebugMacOsFallback = true;
+          if (!_loggedDebugFallback) {
+            _loggedDebugFallback = true;
+            debugPrint(
+              'FlutterSecureKeyringService: macOS Keychain write unavailable '
+              'in debug build ($e); continuing with debug-only local keyring file.',
+            );
+          }
+        }
         // Leave debug fallback file intact if migration did not complete.
       }
     }
@@ -190,6 +204,9 @@ class FlutterSecureKeyringService implements SecureKeyringService {
       final result = await keychainAction();
       if (Platform.isMacOS && !_macOsMigrationAttempted) {
         await _migrateMacOsKeysIfNeeded();
+        if (_useDebugMacOsFallback && kDebugMode) {
+          return await fallbackAction();
+        }
         return await keychainAction();
       }
       return result;
@@ -261,6 +278,16 @@ class FlutterSecureKeyringService implements SecureKeyringService {
     );
   }
 
+  Future<Map<String, String>> _readMergedDebugFallbackMap() async {
+    final fallbackEntries = await _readDebugFallbackMap();
+    try {
+      final primaryEntries = await _storage.readAll();
+      return {...primaryEntries, ...fallbackEntries};
+    } catch (_) {
+      return fallbackEntries;
+    }
+  }
+
   @override
   Future<Uint8List?> getSeed(Uint8List identityKey) async {
     _validateKey(identityKey);
@@ -274,7 +301,13 @@ class FlutterSecureKeyringService implements SecureKeyringService {
         },
         () async {
           final map = await _readDebugFallbackMap();
-          return _tryHexToBytes32(map[storageKey]);
+          var hexSeed = map[storageKey];
+          if (hexSeed == null) {
+            try {
+              hexSeed = await _storage.read(key: storageKey);
+            } catch (_) {}
+          }
+          return _tryHexToBytes32(hexSeed);
         },
       ),
     );
@@ -285,7 +318,7 @@ class FlutterSecureKeyringService implements SecureKeyringService {
     return _serialized(
       () => _withMacOsDebugFallback(
         () => _extractKeys(_storage.readAll()),
-        () => _extractKeys(_readDebugFallbackMap()),
+        () => _extractKeys(_readMergedDebugFallbackMap()),
       ),
     );
   }
@@ -315,7 +348,7 @@ class FlutterSecureKeyringService implements SecureKeyringService {
     return _serialized(
       () => _withMacOsDebugFallback(
         () => _extractSeeds(_storage.readAll()),
-        () => _extractSeeds(_readDebugFallbackMap()),
+        () => _extractSeeds(_readMergedDebugFallbackMap()),
       ),
     );
   }

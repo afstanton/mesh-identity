@@ -113,7 +113,7 @@ class _IdentityViewState extends State<IdentityView> {
           maxLength: IdentityController.maxLocalLabelLength,
           onChanged: (value) => label = value,
           decoration: const InputDecoration(
-            labelText: 'Display name (local only)',
+            labelText: 'Display name (local)',
             hintText: 'e.g. Work, Personal',
             border: OutlineInputBorder(),
           ),
@@ -132,7 +132,13 @@ class _IdentityViewState extends State<IdentityView> {
       ),
     );
     if (confirmed != true || !mounted) return;
-    await widget.controller.setPersonaLabel(identityKey, label.trim());
+    setState(() => _errorMessage = null);
+    try {
+      await widget.controller.setPersonaLabel(identityKey, label.trim());
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _errorMessage = 'Failed to save persona name: $e');
+    }
   }
 
   Future<void> _selectPersona(Uint8List identityKey) async {
@@ -431,33 +437,18 @@ class _IdentityViewState extends State<IdentityView> {
                         Row(
                           children: [
                             Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  if (widget.controller.personaLabel(
-                                        identity,
-                                      ) !=
-                                      null) ...[
-                                    Text(
-                                      widget.controller.personaLabel(identity)!,
-                                      style: theme.textTheme.titleMedium,
-                                    ),
-                                    const SizedBox(height: 2),
-                                  ],
-                                  Text(
+                              child: Text(
+                                widget.controller.personaLabel(identity) ??
                                     shortHexKey(identity),
-                                    style:
-                                        (widget.controller.personaLabel(
-                                                      identity,
-                                                    ) !=
-                                                    null
-                                                ? theme.textTheme.bodyMedium
-                                                : theme.textTheme.titleMedium)
-                                            ?.merge(
-                                              AppTheme.monospaceStyle(context),
-                                            ),
-                                  ),
-                                ],
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style:
+                                    widget.controller.personaLabel(identity) !=
+                                        null
+                                    ? theme.textTheme.titleMedium
+                                    : theme.textTheme.titleMedium?.merge(
+                                        AppTheme.monospaceStyle(context),
+                                      ),
                               ),
                             ),
                             IconButton(
@@ -477,6 +468,18 @@ class _IdentityViewState extends State<IdentityView> {
                               ),
                           ],
                         ),
+                        if (widget.controller.personaLabel(identity) !=
+                            null) ...[
+                          const SizedBox(height: 2),
+                          Text(
+                            shortHexKey(identity),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodyMedium?.merge(
+                              AppTheme.monospaceStyle(context),
+                            ),
+                          ),
+                        ],
                         const SizedBox(height: 8),
                         Row(
                           children: [

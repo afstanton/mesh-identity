@@ -36,7 +36,8 @@ class TwoDeviceEncounterScreen extends StatefulWidget {
       _TwoDeviceEncounterScreenState();
 }
 
-class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen> {
+class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen>
+    with WidgetsBindingObserver {
   Timer? _ticker;
   late EncounterRole _currentRole;
   late final BleEncounterTransport _bleTransport;
@@ -49,6 +50,7 @@ class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _currentRole = widget.initialRole;
     _ownsBleTransport = widget.bleTransport == null;
     _bleTransport = widget.bleTransport ?? BluetoothLowEnergyTransport();
@@ -176,6 +178,17 @@ class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen> {
     }
   }
 
+  Future<void> _requestBlePermission() async {
+    try {
+      await _bleTransport.requestPermission();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Bluetooth permission request failed: $e')),
+      );
+    }
+  }
+
   void _onTick(Timer _) {
     if (!mounted || widget.controller.isDisposed) return;
     final session = widget.controller.encounterSession;
@@ -203,7 +216,17 @@ class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen> {
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        (_bleStatus == BleTransportStatus.permissionDenied ||
+            _bleStatus == BleTransportStatus.bluetoothOff)) {
+      unawaited(_bleTransport.probeAvailability());
+    }
+  }
+
+  @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _ticker?.cancel();
     _bleStatusSub?.cancel();
     _blePeersSub?.cancel();
@@ -353,6 +376,7 @@ class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen> {
               status: _bleStatus,
               discoveredPeers: _blePeers,
               onToggleBle: () => unawaited(_toggleBle(session, role)),
+              onRequestPermission: () => unawaited(_requestBlePermission()),
               onConnectPeer: (peer) => unawaited(_connectBlePeer(peer)),
             ),
             const SizedBox(height: 16),
@@ -404,6 +428,7 @@ class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen> {
               status: _bleStatus,
               discoveredPeers: _blePeers,
               onToggleBle: () => unawaited(_toggleBle(session, role)),
+              onRequestPermission: () => unawaited(_requestBlePermission()),
               onConnectPeer: (peer) => unawaited(_connectBlePeer(peer)),
             ),
             const SizedBox(height: 16),
@@ -449,6 +474,7 @@ class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen> {
               status: _bleStatus,
               discoveredPeers: _blePeers,
               onToggleBle: () => unawaited(_toggleBle(session, role)),
+              onRequestPermission: () => unawaited(_requestBlePermission()),
               onConnectPeer: (peer) => unawaited(_connectBlePeer(peer)),
             ),
             const SizedBox(height: 16),
@@ -502,6 +528,7 @@ class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen> {
               status: _bleStatus,
               discoveredPeers: _blePeers,
               onToggleBle: () => unawaited(_toggleBle(session, role)),
+              onRequestPermission: () => unawaited(_requestBlePermission()),
               onConnectPeer: (peer) => unawaited(_connectBlePeer(peer)),
             ),
             const SizedBox(height: 16),

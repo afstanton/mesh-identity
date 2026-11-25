@@ -555,4 +555,56 @@ void main() {
       expect(toggle.onPressed, isNull);
     },
   );
+
+  testWidgets(
+    'TwoDeviceEncounterScreen shows Grant Permission button when BLE permission is denied',
+    (tester) async {
+      final bob = IdentityController(
+        keyring: InMemoryKeyringService(),
+        storage: InMemorySnapshotStorageService(),
+        handoffOutbox: InMemoryHandoffOutboxService(),
+      );
+      await bob.initialize();
+      addTearDown(bob.dispose);
+
+      final channel = InMemoryBleChannel();
+      final deniedBle = channel.createResponderTransport(
+        forcedErrorStatus: BleTransportStatus.permissionDenied,
+        forcedErrorMessage:
+            'Bluetooth permission was denied. Enable it in system settings.',
+        grantPermissionOnRequest: true,
+      );
+      addTearDown(deniedBle.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TwoDeviceEncounterScreen(
+            controller: bob,
+            initialRole: EncounterRole.responder,
+            qrScanner: FakeQrScannerService(isCameraSupported: false),
+            bleTransport: deniedBle,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Bluetooth permission denied'), findsOneWidget);
+      expect(
+        find.byKey(const Key('ble_grant_permission_button')),
+        findsOneWidget,
+      );
+      expect(find.byKey(const Key('ble_toggle_button')), findsNothing);
+
+      // Granting permission transitions status back to idle and restores controls.
+      await tester.tap(find.byKey(const Key('ble_grant_permission_button')));
+      await tester.pumpAndSettle();
+
+      expect(deniedBle.status, BleTransportStatus.idle);
+      expect(find.byKey(const Key('ble_toggle_button')), findsOneWidget);
+      expect(
+        find.byKey(const Key('ble_grant_permission_button')),
+        findsNothing,
+      );
+    },
+  );
 }

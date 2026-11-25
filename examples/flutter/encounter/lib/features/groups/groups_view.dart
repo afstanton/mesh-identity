@@ -192,15 +192,27 @@ class _GroupsViewState extends State<GroupsView> {
       _statusMessage = null;
     });
     try {
-      final groupId = await widget.groupController.createGroup(
+      final existingGroupIds = widget.groupController.groups
+          .map((g) => g.groupId)
+          .toSet();
+      await widget.groupController.createGroup(
         members: selectedKeys.values.toList(growable: false),
       );
       String? labelWarning;
       if (groupName.isNotEmpty) {
-        try {
-          await widget.identityController.setGroupName(groupId, groupName);
-        } catch (e) {
-          labelWarning = 'Group created, but saving the local name failed: $e';
+        final createdGroups = widget.groupController.groups
+            .where((g) => !existingGroupIds.contains(g.groupId))
+            .toList(growable: false);
+        if (createdGroups.isNotEmpty) {
+          try {
+            await widget.identityController.setGroupName(
+              createdGroups.first.groupId,
+              groupName,
+            );
+          } catch (e) {
+            labelWarning =
+                'Group created, but saving the local name failed: $e';
+          }
         }
       }
       if (!mounted) return;
@@ -944,13 +956,6 @@ class _GroupsViewState extends State<GroupsView> {
             const SizedBox(height: 2),
             Text(
               'Pending outgoing group updates waiting to be shared',
-              style: theme.textTheme.bodySmall?.copyWith(
-                color: theme.colorScheme.onSurfaceVariant,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'Frames released only after durable snapshot confirmation.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),

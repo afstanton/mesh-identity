@@ -12,6 +12,7 @@ class BleEncounterPanel extends StatelessWidget {
   final BleTransportStatus status;
   final List<BlePeerDiscovery> discoveredPeers;
   final VoidCallback onToggleBle;
+  final VoidCallback? onRequestPermission;
   final ValueChanged<BlePeerDiscovery> onConnectPeer;
 
   const BleEncounterPanel({
@@ -21,6 +22,7 @@ class BleEncounterPanel extends StatelessWidget {
     required this.status,
     required this.discoveredPeers,
     required this.onToggleBle,
+    this.onRequestPermission,
     required this.onConnectPeer,
   });
 
@@ -109,28 +111,36 @@ class BleEncounterPanel extends StatelessWidget {
                     ),
                   ],
                 ),
-                FilledButton.tonalIcon(
-                  key: const Key('ble_toggle_button'),
-                  onPressed:
-                      status == BleTransportStatus.exchanging ||
-                          status == BleTransportStatus.connecting ||
-                          status == BleTransportStatus.unsupported
-                      ? null
-                      : onToggleBle,
-                  icon: Icon(
-                    _isActive
-                        ? Icons.bluetooth_searching
-                        : Icons.bluetooth_outlined,
-                    size: 18,
+                if (status == BleTransportStatus.permissionDenied)
+                  FilledButton.tonalIcon(
+                    key: const Key('ble_grant_permission_button'),
+                    onPressed: onRequestPermission,
+                    icon: const Icon(Icons.lock_open_outlined, size: 18),
+                    label: const Text('Grant Permission'),
+                  )
+                else
+                  FilledButton.tonalIcon(
+                    key: const Key('ble_toggle_button'),
+                    onPressed:
+                        status == BleTransportStatus.exchanging ||
+                            status == BleTransportStatus.connecting ||
+                            status == BleTransportStatus.unsupported
+                        ? null
+                        : onToggleBle,
+                    icon: Icon(
+                      _isActive
+                          ? Icons.bluetooth_searching
+                          : Icons.bluetooth_outlined,
+                      size: 18,
+                    ),
+                    label: Text(
+                      _isActive
+                          ? 'Stop BLE'
+                          : (role == EncounterRole.initiator
+                                ? 'Advertise via BLE'
+                                : 'Scan via BLE'),
+                    ),
                   ),
-                  label: Text(
-                    _isActive
-                        ? 'Stop BLE'
-                        : (role == EncounterRole.initiator
-                              ? 'Advertise via BLE'
-                              : 'Scan via BLE'),
-                  ),
-                ),
               ],
             ),
             if (error != null) ...[

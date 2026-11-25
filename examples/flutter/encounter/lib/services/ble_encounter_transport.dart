@@ -50,6 +50,8 @@ abstract interface class BleEncounterTransport {
 
   Future<void> probeAvailability();
 
+  Future<void> requestPermission();
+
   Future<void> startInitiatorPeripheral({
     required Uint8List offerBytes,
     required Future<Uint8List> Function(Uint8List responseBytes)
@@ -243,6 +245,11 @@ class BluetoothLowEnergyTransport implements BleEncounterTransport {
           BleTransportStatus.permissionDenied,
           'Bluetooth permission is required for nearby BLE exchange.',
         );
+      } else if (state == BluetoothLowEnergyState.poweredOn &&
+          (_status == BleTransportStatus.permissionDenied ||
+              _status == BleTransportStatus.bluetoothOff ||
+              _status == BleTransportStatus.unsupported)) {
+        _setStatus(BleTransportStatus.idle);
       }
     } catch (_) {
       _setStatus(
@@ -250,6 +257,28 @@ class BluetoothLowEnergyTransport implements BleEncounterTransport {
         'Bluetooth Low Energy is unavailable on this device.',
       );
     }
+  }
+
+  @override
+  Future<void> requestPermission() async {
+    if (_isDisposed) return;
+    if (!isCentralSupported && !isPeripheralSupported) return;
+    try {
+      final cm = _central ??= CentralManager();
+      if (cm.state == BluetoothLowEnergyState.unauthorized) {
+        if (Platform.isAndroid) {
+          final granted = await cm.authorize();
+          if (!granted) {
+            await cm.showAppSettings();
+          }
+        } else if (Platform.isIOS) {
+          await cm.showAppSettings();
+        }
+      }
+    } catch (_) {
+      // Best-effort permission request / settings navigation.
+    }
+    await probeAvailability();
   }
 
   @override
@@ -764,10 +793,12 @@ class InMemoryBleChannel {
   InMemoryBleEncounterTransport createResponderTransport({
     BleTransportStatus? forcedErrorStatus,
     String? forcedErrorMessage,
+    bool grantPermissionOnRequest = false,
   }) => InMemoryBleEncounterTransport._(
     this,
     forcedErrorStatus: forcedErrorStatus,
     forcedErrorMessage: forcedErrorMessage,
+    grantPermissionOnRequest: grantPermissionOnRequest,
   );
 }
 
@@ -775,8 +806,9 @@ class InMemoryBleChannel {
 /// reassembly via [InMemoryBleChannel].
 class InMemoryBleEncounterTransport implements BleEncounterTransport {
   final InMemoryBleChannel _channel;
-  final BleTransportStatus? _forcedErrorStatus;
-  final String? _forcedErrorMessage;
+  BleTransportStatus? _forcedErrorStatus;
+  String? _forcedErrorMessage;
+  final bool grantPermissionOnRequest;
 
   final StreamController<BleTransportStatus> _statusController =
       StreamController<BleTransportStatus>.broadcast();
@@ -792,6 +824,7 @@ class InMemoryBleEncounterTransport implements BleEncounterTransport {
     this._channel, {
     BleTransportStatus? forcedErrorStatus,
     String? forcedErrorMessage,
+    this.grantPermissionOnRequest = false,
   }) : _forcedErrorStatus = forcedErrorStatus,
        _forcedErrorMessage = forcedErrorMessage {
     if (forcedErrorStatus != null) {
@@ -834,13 +867,23 @@ class InMemoryBleEncounterTransport implements BleEncounterTransport {
   Future<void> probeAvailability() async {}
 
   @override
+  Future<void> requestPermission() async {
+    if (_forcedErrorStatus == BleTransportStatus.permissionDenied &&
+        grantPermissionOnRequest) {
+      _forcedErrorStatus = null;
+      _forcedErrorMessage = null;
+      _setStatus(BleTransportStatus.idle);
+    }
+  }
+
+  @override
   Future<void> startInitiatorPeripheral({
     required Uint8List offerBytes,
     required Future<Uint8List> Function(Uint8List responseBytes)
     onResponseReceived,
   }) async {
     if (_forcedErrorStatus != null) {
-      _setStatus(_forcedErrorStatus, _forcedErrorMessage);
+      _setStatus(_forcedErrorStatus!, _forcedErrorMessage);
       return;
     }
     final epoch = _operationEpoch;
@@ -865,7 +908,7 @@ class InMemoryBleEncounterTransport implements BleEncounterTransport {
   @override
   Future<void> startResponderScan() async {
     if (_forcedErrorStatus != null) {
-      _setStatus(_forcedErrorStatus, _forcedErrorMessage);
+      _setStatus(_forcedErrorStatus!, _forcedErrorMessage);
       return;
     }
     _setStatus(BleTransportStatus.scanning);
@@ -889,7 +932,7 @@ class InMemoryBleEncounterTransport implements BleEncounterTransport {
     required Future<void> Function(Uint8List revealBytes) onRevealReceived,
   }) async {
     if (_forcedErrorStatus != null) {
-      _setStatus(_forcedErrorStatus, _forcedErrorMessage);
+      _setStatus(_forcedErrorStatus!, _forcedErrorMessage);
       return;
     }
     if (!_channel._advertising ||

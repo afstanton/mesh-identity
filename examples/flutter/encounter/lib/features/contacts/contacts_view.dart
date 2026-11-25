@@ -13,8 +13,13 @@ enum ContactFilter { all, verified, unverified, blocked }
 /// unverified hex peer key import for the active persona.
 class ContactsView extends StatefulWidget {
   final IdentityController controller;
+  final VoidCallback? onStartEncounter;
 
-  const ContactsView({super.key, required this.controller});
+  const ContactsView({
+    super.key,
+    required this.controller,
+    this.onStartEncounter,
+  });
 
   @override
   State<ContactsView> createState() => _ContactsViewState();
@@ -101,23 +106,16 @@ class _ContactsViewState extends State<ContactsView> {
           padding: const EdgeInsets.all(20),
           children: [
             Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
                 Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Contacts', style: theme.textTheme.headlineSmall),
-                      const SizedBox(height: 4),
-                      Text(
-                        '${contacts.length} '
-                        '${contacts.length == 1 ? 'contact' : 'contacts'} '
-                        'for the active persona',
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                          color: theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ],
+                  child: Text(
+                    '${contacts.length} '
+                    '${contacts.length == 1 ? 'contact' : 'contacts'} '
+                    'for the active persona',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -156,63 +154,69 @@ class _ContactsViewState extends State<ContactsView> {
                 ),
               ),
             ],
-            const SizedBox(height: 16),
-            TextField(
-              key: const Key('contacts_search_field'),
-              controller: _searchController,
-              onChanged: (_) => setState(() {}),
-              decoration: InputDecoration(
-                labelText: 'Search contacts',
-                hintText: 'Filter by alias or public key hex',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: _searchController.text.isEmpty
-                    ? null
-                    : IconButton(
-                        tooltip: 'Clear search',
-                        onPressed: () {
-                          _searchController.clear();
-                          setState(() {});
-                        },
-                        icon: const Icon(Icons.close),
-                      ),
-                border: const OutlineInputBorder(),
+            if (contacts.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              TextField(
+                key: const Key('contacts_search_field'),
+                controller: _searchController,
+                onChanged: (_) => setState(() {}),
+                decoration: InputDecoration(
+                  labelText: 'Search contacts',
+                  hintText: 'Filter by alias or public key hex',
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: _searchController.text.isEmpty
+                      ? null
+                      : IconButton(
+                          tooltip: 'Clear search',
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() {});
+                          },
+                          icon: const Icon(Icons.close),
+                        ),
+                  border: const OutlineInputBorder(),
+                ),
               ),
-            ),
-            const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                FilterChip(
-                  key: const Key('filter_all'),
-                  label: const Text('All'),
-                  selected: _filter == ContactFilter.all,
-                  onSelected: (_) =>
-                      setState(() => _filter = ContactFilter.all),
+              const SizedBox(height: 12),
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    FilterChip(
+                      key: const Key('filter_all'),
+                      label: const Text('All'),
+                      selected: _filter == ContactFilter.all,
+                      onSelected: (_) =>
+                          setState(() => _filter = ContactFilter.all),
+                    ),
+                    const SizedBox(width: 8),
+                    FilterChip(
+                      key: const Key('filter_verified'),
+                      label: const Text('Verified'),
+                      selected: _filter == ContactFilter.verified,
+                      onSelected: (_) =>
+                          setState(() => _filter = ContactFilter.verified),
+                    ),
+                    const SizedBox(width: 8),
+                    FilterChip(
+                      key: const Key('filter_unverified'),
+                      label: const Text('Unverified'),
+                      selected: _filter == ContactFilter.unverified,
+                      onSelected: (_) =>
+                          setState(() => _filter = ContactFilter.unverified),
+                    ),
+                    const SizedBox(width: 8),
+                    FilterChip(
+                      key: const Key('filter_blocked'),
+                      label: const Text('Blocked'),
+                      selected: _filter == ContactFilter.blocked,
+                      onSelected: (_) =>
+                          setState(() => _filter = ContactFilter.blocked),
+                    ),
+                  ],
                 ),
-                FilterChip(
-                  key: const Key('filter_verified'),
-                  label: const Text('Verified'),
-                  selected: _filter == ContactFilter.verified,
-                  onSelected: (_) =>
-                      setState(() => _filter = ContactFilter.verified),
-                ),
-                FilterChip(
-                  key: const Key('filter_unverified'),
-                  label: const Text('Unverified'),
-                  selected: _filter == ContactFilter.unverified,
-                  onSelected: (_) =>
-                      setState(() => _filter = ContactFilter.unverified),
-                ),
-                FilterChip(
-                  key: const Key('filter_blocked'),
-                  label: const Text('Blocked'),
-                  selected: _filter == ContactFilter.blocked,
-                  onSelected: (_) =>
-                      setState(() => _filter = ContactFilter.blocked),
-                ),
-              ],
-            ),
+              ),
+            ],
             const SizedBox(height: 16),
             if (contacts.isEmpty)
               _EmptyContactsCard(
@@ -221,6 +225,10 @@ class _ContactsViewState extends State<ContactsView> {
                 message:
                     'Complete an in-person Encounter or import an unverified '
                     'Ed25519 peer public key to add your first contact.',
+                actionLabel: widget.onStartEncounter == null
+                    ? null
+                    : 'Start an Encounter',
+                onAction: widget.onStartEncounter,
               )
             else if (filtered.isEmpty)
               _EmptyContactsCard(
@@ -251,11 +259,15 @@ class _EmptyContactsCard extends StatelessWidget {
   final IconData icon;
   final String title;
   final String message;
+  final String? actionLabel;
+  final VoidCallback? onAction;
 
   const _EmptyContactsCard({
     required this.icon,
     required this.title,
     required this.message,
+    this.actionLabel,
+    this.onAction,
   });
 
   @override
@@ -277,6 +289,15 @@ class _EmptyContactsCard extends StatelessWidget {
                 color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
+            if (actionLabel != null && onAction != null) ...[
+              const SizedBox(height: 16),
+              FilledButton.icon(
+                key: const Key('empty_contacts_start_encounter_button'),
+                onPressed: onAction,
+                icon: const Icon(Icons.qr_code_2, size: 18),
+                label: Text(actionLabel!),
+              ),
+            ],
           ],
         ),
       ),

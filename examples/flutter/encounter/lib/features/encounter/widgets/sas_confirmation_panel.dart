@@ -30,7 +30,7 @@ class SasConfirmationPanel extends StatefulWidget {
     this.enabled = true,
     this.onCancel,
     this.confirmLabel = 'Confirm & Save Contact',
-    this.codeLabel = 'This device\'s 6-digit code:',
+    this.codeLabel = 'This device\'s match code (SAS):',
     this.codeKey,
     this.inputKey,
     this.confirmButtonKey,
@@ -41,8 +41,30 @@ class SasConfirmationPanel extends StatefulWidget {
   State<SasConfirmationPanel> createState() => _SasConfirmationPanelState();
 }
 
+class _GroupedSixDigitFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final digitsOnly = newValue.text.replaceAll(RegExp(r'\D'), '');
+    final clamped = digitsOnly.length > 6
+        ? digitsOnly.substring(0, 6)
+        : digitsOnly;
+    final formatted = clamped.length <= 3
+        ? clamped
+        : '${clamped.substring(0, 3)} ${clamped.substring(3)}';
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
+    );
+  }
+}
+
 class _SasConfirmationPanelState extends State<SasConfirmationPanel> {
   final TextEditingController _controller = TextEditingController();
+
+  String get _rawDigits => _controller.text.replaceAll(RegExp(r'\D'), '');
 
   @override
   void dispose() {
@@ -51,15 +73,16 @@ class _SasConfirmationPanelState extends State<SasConfirmationPanel> {
   }
 
   void _confirm() {
-    if (!widget.enabled || _controller.text.length != 6) return;
-    widget.onConfirm(_controller.text);
+    final digits = _rawDigits;
+    if (!widget.enabled || digits.length != 6) return;
+    widget.onConfirm(digits);
   }
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final formatted = formatSasDigits(widget.comparison);
-    final digitCount = _controller.text.length;
+    final digitCount = _rawDigits.length;
     final canConfirm = widget.enabled && digitCount == 6;
 
     return Card(
@@ -131,22 +154,26 @@ class _SasConfirmationPanelState extends State<SasConfirmationPanel> {
               controller: _controller,
               enabled: widget.enabled,
               keyboardType: TextInputType.number,
-              maxLength: 6,
-              inputFormatters: [
-                FilteringTextInputFormatter.digitsOnly,
-                LengthLimitingTextInputFormatter(6),
-              ],
+              textInputAction: TextInputAction.done,
+              inputFormatters: [_GroupedSixDigitFormatter()],
               style: AppTheme.monospaceStyle(context)
                   .copyWith(fontSize: 20, letterSpacing: 4),
               decoration: InputDecoration(
                 border: const OutlineInputBorder(),
-                labelText: 'Enter peer\'s 6-digit code',
-                hintText: '000000',
+                labelText: 'Enter peer\'s 6-digit match code',
+                hintText: '000 000',
                 counterText: '$digitCount / 6 digits',
                 errorText: widget.inlineError,
                 errorMaxLines: 3,
               ),
-              onChanged: (_) => setState(() {}),
+              onTapOutside: (_) =>
+                  FocusManager.instance.primaryFocus?.unfocus(),
+              onChanged: (_) {
+                setState(() {});
+                if (_rawDigits.length == 6) {
+                  FocusManager.instance.primaryFocus?.unfocus();
+                }
+              },
               onSubmitted: (_) => _confirm(),
             ),
             const SizedBox(height: 12),

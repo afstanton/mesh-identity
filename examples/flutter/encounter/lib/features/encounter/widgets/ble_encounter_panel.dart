@@ -109,14 +109,20 @@ class BleEncounterPanel extends StatelessWidget {
                     ),
                   ],
                 ),
-                FilledButton.tonal(
+                FilledButton.tonalIcon(
                   key: const Key('ble_toggle_button'),
                   onPressed:
                       status == BleTransportStatus.exchanging ||
                           status == BleTransportStatus.connecting
                       ? null
                       : onToggleBle,
-                  child: Text(
+                  icon: Icon(
+                    _isActive
+                        ? Icons.bluetooth_searching
+                        : Icons.bluetooth_outlined,
+                    size: 18,
+                  ),
+                  label: Text(
                     _isActive
                         ? 'Stop BLE'
                         : (role == EncounterRole.initiator

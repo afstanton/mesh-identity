@@ -48,6 +48,8 @@ abstract interface class BleEncounterTransport {
   Stream<BleTransportStatus> get statusStream;
   Stream<List<BlePeerDiscovery>> get discoveredPeersStream;
 
+  Future<void> probeAvailability();
+
   Future<void> startInitiatorPeripheral({
     required Uint8List offerBytes,
     required Future<Uint8List> Function(Uint8List responseBytes)
@@ -199,6 +201,42 @@ class BluetoothLowEnergyTransport implements BleEncounterTransport {
           'Bluetooth adapter is not ready. Ensure Bluetooth is turned on.',
         );
         return false;
+    }
+  }
+
+  @override
+  Future<void> probeAvailability() async {
+    if (_isDisposed) return;
+    if (!isCentralSupported && !isPeripheralSupported) {
+      _setStatus(
+        BleTransportStatus.unsupported,
+        'Bluetooth Low Energy is not supported on this platform.',
+      );
+      return;
+    }
+    try {
+      final cm = _central ??= CentralManager();
+      if (cm.state == BluetoothLowEnergyState.unsupported) {
+        _setStatus(
+          BleTransportStatus.unsupported,
+          'Bluetooth Low Energy is not supported on this device.',
+        );
+      } else if (cm.state == BluetoothLowEnergyState.poweredOff) {
+        _setStatus(
+          BleTransportStatus.bluetoothOff,
+          'Turn on Bluetooth to exchange Encounter payloads nearby.',
+        );
+      } else if (cm.state == BluetoothLowEnergyState.unauthorized) {
+        _setStatus(
+          BleTransportStatus.permissionDenied,
+          'Bluetooth permission is required for nearby BLE exchange.',
+        );
+      }
+    } catch (_) {
+      _setStatus(
+        BleTransportStatus.unsupported,
+        'Bluetooth Low Energy is unavailable on this device.',
+      );
     }
   }
 
@@ -779,6 +817,9 @@ class InMemoryBleEncounterTransport implements BleEncounterTransport {
       _statusController.add(next);
     }
   }
+
+  @override
+  Future<void> probeAvailability() async {}
 
   @override
   Future<void> startInitiatorPeripheral({

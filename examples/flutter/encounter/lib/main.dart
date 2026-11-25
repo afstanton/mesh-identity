@@ -186,7 +186,14 @@ class _EncounterAppState extends State<EncounterApp> {
         controller: _controller,
         qrScanner: widget.qrScanner ?? const ZxingQrScannerService(),
       ),
-      AppDestination.contacts => ContactsView(controller: _controller),
+      AppDestination.contacts => ContactsView(
+        controller: _controller,
+        onStartEncounter: () {
+          setState(() {
+            _selectedDestination = AppDestination.encounter;
+          });
+        },
+      ),
       AppDestination.groups => GroupsView(
         identityController: _controller,
         groupController: _groupController,
@@ -203,6 +210,7 @@ class _EncounterAppState extends State<EncounterApp> {
       builder: (context, themeMode, _) {
         return MaterialApp(
           title: AppConfig.appName,
+          debugShowCheckedModeBanner: false,
           theme: AppTheme.light(),
           darkTheme: AppTheme.dark(),
           themeMode: themeMode,

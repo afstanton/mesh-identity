@@ -36,16 +36,49 @@ class _IdentityViewState extends State<IdentityView> {
   }
 
   Future<void> _addPersona() async {
+    var label = '';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Create Persona'),
+        content: TextField(
+          key: const Key('persona_name_field'),
+          onChanged: (value) => label = value,
+          decoration: const InputDecoration(
+            labelText: 'Display name (optional)',
+            hintText: 'e.g. Work, Personal',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('confirm_add_persona_button'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+    final trimmed = label.trim();
+    if (confirmed != true || !mounted) return;
+
     setState(() {
       _isBusy = true;
       _errorMessage = null;
     });
     try {
       final created = await widget.controller.addPersona();
+      if (trimmed.isNotEmpty) {
+        await widget.controller.setPersonaLabel(created, trimmed);
+      }
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Added persona ${shortHexKey(created)}')),
-      );
+      final display = trimmed.isNotEmpty ? trimmed : shortHexKey(created);
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('Added persona $display')));
     } on MeshIdentityException catch (e) {
       if (!mounted) return;
       setState(() => _errorMessage = e.message);
@@ -55,6 +88,39 @@ class _IdentityViewState extends State<IdentityView> {
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
+  }
+
+  Future<void> _editPersonaLabel(Uint8List identityKey) async {
+    var label = widget.controller.personaLabel(identityKey) ?? '';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Rename Persona'),
+        content: TextFormField(
+          key: const Key('rename_persona_field'),
+          initialValue: label,
+          onChanged: (value) => label = value,
+          decoration: const InputDecoration(
+            labelText: 'Display name (local only)',
+            hintText: 'e.g. Work, Personal',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            key: const Key('confirm_rename_persona_button'),
+            onPressed: () => Navigator.of(dialogContext).pop(true),
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+    await widget.controller.setPersonaLabel(identityKey, label.trim());
   }
 
   Future<void> _selectPersona(Uint8List identityKey) async {
@@ -260,20 +326,13 @@ class _IdentityViewState extends State<IdentityView> {
               alignment: WrapAlignment.spaceBetween,
               crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text('Identity', style: theme.textTheme.headlineSmall),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${identities.length} '
-                      '${identities.length == 1 ? 'persona' : 'personas'} '
-                      'on this installation',
-                      style: theme.textTheme.bodyMedium?.copyWith(
-                        color: theme.colorScheme.onSurfaceVariant,
-                      ),
-                    ),
-                  ],
+                Text(
+                  '${identities.length} '
+                  '${identities.length == 1 ? 'persona' : 'personas'} '
+                  'on this installation',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
                 ),
                 Wrap(
                   spacing: 8,
@@ -360,12 +419,42 @@ class _IdentityViewState extends State<IdentityView> {
                         Row(
                           children: [
                             Expanded(
-                              child: Text(
-                                shortHexKey(identity),
-                                style: theme.textTheme.titleMedium?.merge(
-                                  AppTheme.monospaceStyle(context),
-                                ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  if (widget.controller.personaLabel(
+                                        identity,
+                                      ) !=
+                                      null) ...[
+                                    Text(
+                                      widget.controller.personaLabel(identity)!,
+                                      style: theme.textTheme.titleMedium,
+                                    ),
+                                    const SizedBox(height: 2),
+                                  ],
+                                  Text(
+                                    shortHexKey(identity),
+                                    style:
+                                        (widget.controller.personaLabel(
+                                                      identity,
+                                                    ) !=
+                                                    null
+                                                ? theme.textTheme.bodyMedium
+                                                : theme.textTheme.titleMedium)
+                                            ?.merge(
+                                              AppTheme.monospaceStyle(context),
+                                            ),
+                                  ),
+                                ],
                               ),
+                            ),
+                            IconButton(
+                              key: Key('rename_persona_button_$hex'),
+                              tooltip: 'Rename persona',
+                              onPressed: actionsDisabled
+                                  ? null
+                                  : () => _editPersonaLabel(identity),
+                              icon: const Icon(Icons.edit_outlined, size: 18),
                             ),
                             if (isSelected)
                               Chip(

@@ -60,11 +60,18 @@ void main() {
       expect(find.byKey(Key('switch_persona_$firstHex')), findsNothing);
       expect(find.text('1 contact'), findsOneWidget);
 
-      // Add second persona
+      // Add second persona with an optional display name
       await tester.tap(find.byKey(const Key('add_persona_button')));
+      await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const Key('persona_name_field')),
+        'Work',
+      );
+      await tester.tap(find.byKey(const Key('confirm_add_persona_button')));
       await tester.pumpAndSettle();
 
       expect(controller.identities.length, 2);
+      expect(find.text('Work'), findsOneWidget);
       final secondPersona = controller.identities.firstWhere(
         (k) => !listEquals(k, firstPersona),
       );

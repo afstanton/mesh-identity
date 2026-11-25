@@ -247,11 +247,10 @@ class _EncounterHomeViewState extends State<EncounterHomeView> {
                         RateLimitBanner(remaining: pauseRemaining),
                       ],
                       const SizedBox(height: 16),
-                      Wrap(
-                        spacing: 12,
-                        runSpacing: 12,
-                        children: [
-                          FilledButton.icon(
+                      LayoutBuilder(
+                        builder: (context, constraints) {
+                          final compact = constraints.maxWidth < 600;
+                          final startBtn = FilledButton.icon(
                             key: const Key('start_encounter_button'),
                             onPressed: isPaused
                                 ? null
@@ -260,8 +259,8 @@ class _EncounterHomeViewState extends State<EncounterHomeView> {
                                   ),
                             icon: const Icon(Icons.qr_code_2, size: 18),
                             label: const Text('Start Encounter'),
-                          ),
-                          FilledButton.tonalIcon(
+                          );
+                          final joinBtn = FilledButton.tonalIcon(
                             key: const Key('join_encounter_button'),
                             onPressed: isPaused
                                 ? null
@@ -273,14 +272,31 @@ class _EncounterHomeViewState extends State<EncounterHomeView> {
                               size: 18,
                             ),
                             label: const Text('Join Encounter'),
-                          ),
-                          OutlinedButton.icon(
+                          );
+                          final practiceBtn = OutlinedButton.icon(
                             key: const Key('practice_mode_button'),
                             onPressed: _openPracticeMode,
                             icon: const Icon(Icons.science_outlined, size: 18),
                             label: const Text('Practice Mode'),
-                          ),
-                        ],
+                          );
+                          if (compact) {
+                            return Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                startBtn,
+                                const SizedBox(height: 10),
+                                joinBtn,
+                                const SizedBox(height: 10),
+                                practiceBtn,
+                              ],
+                            );
+                          }
+                          return Wrap(
+                            spacing: 12,
+                            runSpacing: 12,
+                            children: [startBtn, joinBtn, practiceBtn],
+                          );
+                        },
                       ),
                     ],
                   ),

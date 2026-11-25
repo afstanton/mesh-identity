@@ -61,6 +61,7 @@ class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen> {
       if (!mounted) return;
       setState(() => _blePeers = peers);
     });
+    unawaited(_bleTransport.probeAvailability());
     widget.controller.addListener(_onControllerChanged);
 
     _ticker = Timer.periodic(const Duration(seconds: 1), _onTick);

@@ -85,9 +85,21 @@ class _GroupsViewState extends State<GroupsView> {
     return shortHexKey(key);
   }
 
+  static String _shortGroupId(BigInt groupId) {
+    final s = groupId.toString();
+    return s.length <= 8 ? s : s.substring(0, 8);
+  }
+
+  String _groupTitle(BigInt groupId) {
+    final name = widget.identityController.groupName(groupId);
+    if (name != null && name.isNotEmpty) return name;
+    return 'Group #${_shortGroupId(groupId)}';
+  }
+
   Future<void> _createGroup() async {
     final verifiedContacts = _verifiedActiveContacts;
     final selectedKeys = <String, Uint8List>{};
+    final nameController = TextEditingController();
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -105,6 +117,16 @@ class _GroupsViewState extends State<GroupsView> {
                     'Create a new group with your active persona. Optionally '
                     'select verified contacts to include as initial members.',
                     style: Theme.of(dialogContext).textTheme.bodySmall,
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    key: const Key('group_name_field'),
+                    controller: nameController,
+                    decoration: const InputDecoration(
+                      labelText: 'Group name (optional)',
+                      hintText: 'e.g. Family, Field Team',
+                      border: OutlineInputBorder(),
+                    ),
                   ),
                   const SizedBox(height: 12),
                   if (verifiedContacts.isEmpty)
@@ -160,6 +182,8 @@ class _GroupsViewState extends State<GroupsView> {
         ),
       ),
     );
+    final groupName = nameController.text.trim();
+    nameController.dispose();
     if (confirmed != true || !mounted) return;
 
     setState(() {
@@ -168,12 +192,15 @@ class _GroupsViewState extends State<GroupsView> {
       _statusMessage = null;
     });
     try {
-      await widget.groupController.createGroup(
+      final groupId = await widget.groupController.createGroup(
         members: selectedKeys.values.toList(growable: false),
       );
+      if (groupName.isNotEmpty) {
+        await widget.identityController.setGroupName(groupId, groupName);
+      }
       if (!mounted) return;
       setState(() {
-        _statusMessage = 'Group created and committed.';
+        _statusMessage = 'Group created.';
       });
     } on MeshIdentityException catch (e) {
       if (!mounted) return;
@@ -542,19 +569,12 @@ class _GroupsViewState extends State<GroupsView> {
                   alignment: WrapAlignment.spaceBetween,
                   crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Groups', style: theme.textTheme.headlineSmall),
-                        const SizedBox(height: 4),
-                        Text(
-                          '${groupCtrl.groups.length} active '
-                          '${groupCtrl.groups.length == 1 ? 'group' : 'groups'}',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: theme.colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ],
+                    Text(
+                      '${groupCtrl.groups.length} active '
+                      '${groupCtrl.groups.length == 1 ? 'group' : 'groups'}',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
                     ),
                     Wrap(
                       spacing: 8,
@@ -687,9 +707,32 @@ class _GroupsViewState extends State<GroupsView> {
                 const SizedBox(height: 16),
                 _buildInvitationsSection(context, groupCtrl, actionsDisabled),
                 const SizedBox(height: 16),
-                _buildOutboxSection(context, groupCtrl, actionsDisabled),
-                const SizedBox(height: 16),
-                _buildReceiveFrameCard(context, actionsDisabled),
+                if (groupCtrl.groups.isEmpty &&
+                    groupCtrl.outgoingMessages.isEmpty)
+                  Card.outlined(
+                    child: ExpansionTile(
+                      key: const Key('groups_advanced_tile'),
+                      title: const Text('Advanced Tools'),
+                      subtitle: const Text(
+                        'Outbox frames and manual peer frame import',
+                      ),
+                      childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+                      children: [
+                        _buildOutboxSection(
+                          context,
+                          groupCtrl,
+                          actionsDisabled,
+                        ),
+                        const SizedBox(height: 12),
+                        _buildReceiveFrameCard(context, actionsDisabled),
+                      ],
+                    ),
+                  )
+                else ...[
+                  _buildOutboxSection(context, groupCtrl, actionsDisabled),
+                  const SizedBox(height: 16),
+                  _buildReceiveFrameCard(context, actionsDisabled),
+                ],
                 if (groupCtrl.recentEvents.isNotEmpty ||
                     groupCtrl.recentOpIds.isNotEmpty) ...[
                   const SizedBox(height: 16),
@@ -736,17 +779,21 @@ class _GroupsViewState extends State<GroupsView> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        crossAxisAlignment: WrapCrossAlignment.center,
                         children: [
-                          Expanded(
-                            child: Text(
-                              'Group ${group.groupId}',
-                              style: theme.textTheme.titleMedium,
-                            ),
+                          Text(
+                            _groupTitle(group.groupId),
+                            style: theme.textTheme.titleMedium,
                           ),
-                          Chip(
-                            label: Text('Rev ${group.revision}'),
-                            visualDensity: VisualDensity.compact,
+                          Tooltip(
+                            message: 'Group revision (increments on each membership change)',
+                            child: Chip(
+                              label: Text('Rev ${group.revision}'),
+                              visualDensity: VisualDensity.compact,
+                            ),
                           ),
                         ],
                       ),

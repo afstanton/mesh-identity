@@ -7,6 +7,7 @@ import 'encounter_coordinator.dart';
 import 'encounter_session.dart';
 import 'handoff_outbox.dart';
 import 'keyring_service.dart';
+import 'local_labels_service.dart';
 import 'snapshot_envelope.dart';
 import 'snapshot_storage.dart';
 
@@ -50,8 +51,12 @@ class IdentityController extends ChangeNotifier {
   final SecureKeyringService _keyring;
   final SnapshotStorageService _storage;
   final HandoffOutboxService _handoffOutbox;
+  final LocalLabelsService _labelsService;
   final DateTime Function() _clock;
   late final EncounterCoordinator _encounter;
+
+  final Map<String, String> _personaLabels = {};
+  final Map<String, String> _groupNames = {};
 
   MeshGroupHandle? _groupHandle;
   IdentityStatus _status = IdentityStatus.uninitialized;
@@ -92,6 +97,7 @@ class IdentityController extends ChangeNotifier {
     SecureKeyringService? keyring,
     SnapshotStorageService? storage,
     HandoffOutboxService? handoffOutbox,
+    LocalLabelsService? localLabels,
     DateTime Function()? clock,
   }) : _keyring = keyring ?? FlutterSecureKeyringService(),
        _storage = storage ?? FileSnapshotStorageService(),
@@ -100,6 +106,11 @@ class IdentityController extends ChangeNotifier {
            (storage == null
                ? FileHandoffOutboxService()
                : InMemoryHandoffOutboxService()),
+       _labelsService =
+           localLabels ??
+           (storage == null
+               ? FileLocalLabelsService()
+               : InMemoryLocalLabelsService()),
        _clock = clock ?? DateTime.now {
     _encounter = EncounterCoordinator(_IdentityEncounterHost(this));
   }
@@ -196,6 +207,39 @@ class IdentityController extends ChangeNotifier {
           'or transfer the role back from another device.';
     }
     return null;
+  }
+
+  /// Optional local display label for [identityKey] persona.
+  String? personaLabel(Uint8List identityKey) =>
+      _personaLabels[_bytesToHex(identityKey)];
+
+  /// Set or clear a local display label for [identityKey] persona.
+  Future<void> setPersonaLabel(Uint8List identityKey, String? label) async {
+    final hex = _bytesToHex(identityKey);
+    final trimmed = label?.trim();
+    if (trimmed == null || trimmed.isEmpty) {
+      _personaLabels.remove(hex);
+    } else {
+      _personaLabels[hex] = trimmed;
+    }
+    await _labelsService.saveAll(personas: _personaLabels, groups: _groupNames);
+    _notifySafely();
+  }
+
+  /// Optional local display name for [groupId].
+  String? groupName(BigInt groupId) => _groupNames[groupId.toString()];
+
+  /// Set or clear a local display name for [groupId].
+  Future<void> setGroupName(BigInt groupId, String? name) async {
+    final key = groupId.toString();
+    final trimmed = name?.trim();
+    if (trimmed == null || trimmed.isEmpty) {
+      _groupNames.remove(key);
+    } else {
+      _groupNames[key] = trimmed;
+    }
+    await _labelsService.saveAll(personas: _personaLabels, groups: _groupNames);
+    _notifySafely();
   }
 
   /// Look up a contact record by [peerPublicKey] on the selected persona.
@@ -317,6 +361,15 @@ class IdentityController extends ChangeNotifier {
     _notifySafely();
 
     try {
+      final labels = await _labelsService.loadAll();
+      if (_isDisposed) return;
+      _personaLabels
+        ..clear()
+        ..addAll(labels.personas);
+      _groupNames
+        ..clear()
+        ..addAll(labels.groups);
+
       final hasSnapshot = await _storage.hasSnapshot();
       if (_isDisposed) return;
       final keyringKeys = await _keyring.getAllIdentityKeys();

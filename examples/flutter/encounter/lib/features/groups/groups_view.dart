@@ -105,7 +105,7 @@ class _GroupsViewState extends State<GroupsView> {
       context: context,
       builder: (dialogContext) => StatefulBuilder(
         builder: (dialogContext, setDialogState) => AlertDialog(
-          title: const Text('Create Byzantine Group'),
+          title: const Text('Create Group'),
           content: SizedBox(
             width: 440,
             child: SingleChildScrollView(
@@ -114,8 +114,8 @@ class _GroupsViewState extends State<GroupsView> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Create a new group with your active persona. Optionally '
-                    'select verified contacts to include as initial members.',
+                    'Create a new group with your active identity. You can '
+                    'include verified contacts now or invite them later.',
                     style: Theme.of(dialogContext).textTheme.bodySmall,
                   ),
                   const SizedBox(height: 12),
@@ -601,14 +601,15 @@ class _GroupsViewState extends State<GroupsView> {
                       runSpacing: 8,
                       children: [
                         Tooltip(
-                          message: 'Import initial group record from a peer',
+                          message:
+                              'Import an existing group shared by a member',
                           child: OutlinedButton.icon(
                             key: const Key('import_genesis_button'),
                             onPressed: actionsDisabled
                                 ? null
                                 : _openImportGenesisDialog,
                             icon: const Icon(Icons.download_outlined),
-                            label: const Text('Import Genesis'),
+                            label: const Text('Import Group'),
                           ),
                         ),
                         FilledButton.icon(
@@ -780,8 +781,8 @@ class _GroupsViewState extends State<GroupsView> {
         child: Padding(
           padding: const EdgeInsets.all(20),
           child: Text(
-            'No active groups yet. Create a group or import an authenticated '
-            'genesis frame from a peer.',
+            'No active groups yet. Create a group or import one shared by a '
+            'member.',
             style: theme.textTheme.bodyMedium?.copyWith(
               color: theme.colorScheme.onSurfaceVariant,
             ),
@@ -813,9 +814,10 @@ class _GroupsViewState extends State<GroupsView> {
                             style: theme.textTheme.titleMedium,
                           ),
                           Tooltip(
-                            message: 'Group revision (increments on each membership change)',
+                            message:
+                                'Group version (revision ${group.revision})',
                             child: Chip(
-                              label: Text('Rev ${group.revision}'),
+                              label: Text('v${group.revision}'),
                               visualDensity: VisualDensity.compact,
                             ),
                           ),
@@ -950,7 +952,7 @@ class _GroupsViewState extends State<GroupsView> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Two-Phase Outbox (${messages.length})',
+              'Pending Updates (${messages.length})',
               style: theme.textTheme.titleMedium,
             ),
             const SizedBox(height: 2),
@@ -1048,12 +1050,11 @@ class _GroupsViewState extends State<GroupsView> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Text('Receive Peer Frame', style: theme.textTheme.titleMedium),
+            Text('Receive Group Update', style: theme.textTheme.titleMedium),
             const SizedBox(height: 4),
             Text(
-              'Pasted frames carry Ed25519 or quorum signatures verified '
-              'natively against the sender key. Optionally select the verified '
-              'contact you received this frame from.',
+              'Paste an update shared by another group member. Optionally '
+              'choose who sent it.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -1248,7 +1249,7 @@ class _ImportGenesisDialogState extends State<_ImportGenesisDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('Import Authenticated Genesis'),
+      title: const Text('Import Existing Group'),
       content: SizedBox(
         width: 440,
         child: Column(
@@ -1261,7 +1262,7 @@ class _ImportGenesisDialogState extends State<_ImportGenesisDialog> {
               maxLines: 2,
               style: AppTheme.monospaceStyle(context).copyWith(fontSize: 12),
               decoration: const InputDecoration(
-                labelText: 'Genesis Frame (mesh:group:...)',
+                labelText: 'Group invite frame (mesh:group:...)',
                 border: OutlineInputBorder(),
               ),
             ),
@@ -1272,11 +1273,10 @@ class _ImportGenesisDialogState extends State<_ImportGenesisDialog> {
               enabled: !_isBusy,
               style: AppTheme.monospaceStyle(context).copyWith(fontSize: 12),
               decoration: InputDecoration(
-                labelText:
-                    'Expected Genesis Digest (64 hex chars, out-of-band)',
+                labelText: 'Verification code (64-char digest)',
                 helperText:
-                    'Obtain this digest from the group founder via an '
-                    'independent channel (in person, voice call, etc.).',
+                    'Get this code from the group creator in person or over a '
+                    'trusted call.',
                 helperMaxLines: 2,
                 border: const OutlineInputBorder(),
                 errorText: _error,

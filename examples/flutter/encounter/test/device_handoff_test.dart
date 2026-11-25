@@ -308,7 +308,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('Role: Voting (Counter 0)'), findsOneWidget);
+      expect(find.text('Active on this device'), findsOneWidget);
       await tester.ensureVisible(
         find.byKey(const Key('open_device_handoff_button')),
       );
@@ -570,7 +570,7 @@ void main() {
         controller.votingRecordForPersona(importedKey)?.state,
         VotingState.gated,
       );
-      expect(find.text('Role: Gated (Counter 0)'), findsNWidgets(2));
+      expect(find.text('Awaiting transfer approval'), findsNWidgets(2));
     },
   );
 }

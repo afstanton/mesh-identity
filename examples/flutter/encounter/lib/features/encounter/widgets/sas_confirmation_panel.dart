@@ -30,7 +30,7 @@ class SasConfirmationPanel extends StatefulWidget {
     this.enabled = true,
     this.onCancel,
     this.confirmLabel = 'Confirm & Save Contact',
-    this.codeLabel = 'This device\'s match code (SAS):',
+    this.codeLabel = 'This device\'s 6-digit match code:',
     this.codeKey,
     this.inputKey,
     this.confirmButtonKey,

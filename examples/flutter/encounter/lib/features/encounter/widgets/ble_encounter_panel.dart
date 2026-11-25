@@ -37,7 +37,7 @@ class BleEncounterPanel extends StatelessWidget {
       BleTransportStatus.connecting => 'Connecting to nearby peer...',
       BleTransportStatus.exchanging => 'Exchanging verification payloads...',
       BleTransportStatus.completed =>
-        'BLE exchange complete — verify 6-digit SAS below',
+        'Bluetooth exchange complete — confirm the 6-digit match code below',
       BleTransportStatus.error => 'BLE exchange error',
     };
   }
@@ -180,8 +180,9 @@ class BleEncounterPanel extends StatelessWidget {
             ],
             const SizedBox(height: 8),
             Text(
-              'Proximity is an unverified radio cue, not authentication. '
-              'BLE payloads broadcast locally like a visible QR; always verify the 6-digit SAS code.',
+              'Signal strength is only a hint, not proof of identity. '
+              'Bluetooth shares data nearby like a visible QR code — always '
+              'confirm the 6-digit match code.',
               key: const Key('ble_security_note'),
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,

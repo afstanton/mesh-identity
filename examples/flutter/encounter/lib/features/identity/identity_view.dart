@@ -222,6 +222,14 @@ class _IdentityViewState extends State<IdentityView> {
     );
   }
 
+  static String _friendlyVotingLabel(VotingState state) {
+    return switch (state) {
+      VotingState.voting => 'Active on this device',
+      VotingState.stopped => 'Transferred to another device',
+      VotingState.gated => 'Awaiting transfer approval',
+    };
+  }
+
   static String _votingStateLabel(VotingState state) {
     return switch (state) {
       VotingState.voting => 'Voting',
@@ -516,10 +524,11 @@ class _IdentityViewState extends State<IdentityView> {
                             ),
                             if (votingRecord != null)
                               Tooltip(
-                                message: 'Active signing role for this device',
+                                message:
+                                    'Protocol role: ${_votingStateLabel(votingRecord.state)} '
+                                    '(Counter ${votingRecord.counter})',
                                 child: Text(
-                                  'Role: ${_votingStateLabel(votingRecord.state)} '
-                                  '(Counter ${votingRecord.counter})',
+                                  _friendlyVotingLabel(votingRecord.state),
                                   style: theme.textTheme.bodySmall?.copyWith(
                                     color: theme.colorScheme.onSurfaceVariant,
                                   ),
@@ -585,18 +594,17 @@ class _IdentityViewState extends State<IdentityView> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Device Handoff & Voting Role',
+                      'Transfer to Another Device',
                       style: theme.textTheme.titleMedium,
                     ),
                     const SizedBox(height: 6),
                     Tooltip(
-                      message: 'Unique per-device transfer token',
+                      message: widget.controller.deviceNonce == null
+                          ? 'Device transfer token not generated yet'
+                          : 'Device token: ${shortHexKey(widget.controller.deviceNonce!)}',
                       child: Text(
-                        widget.controller.deviceNonce == null
-                            ? 'Device nonce: not generated yet.'
-                            : 'Device nonce: ${shortHexKey(widget.controller.deviceNonce!)}',
-                        style: AppTheme.monospaceStyle(context).copyWith(
-                          fontSize: 12,
+                        'Move this identity to another device or approve a transfer.',
+                        style: theme.textTheme.bodySmall?.copyWith(
                           color: theme.colorScheme.onSurfaceVariant,
                         ),
                       ),
@@ -606,7 +614,7 @@ class _IdentityViewState extends State<IdentityView> {
                       key: const Key('open_device_handoff_button'),
                       onPressed: actionsDisabled ? null : _openDeviceHandoff,
                       icon: const Icon(Icons.devices_outlined),
-                      label: const Text('Open Device Handoff'),
+                      label: const Text('Transfer Device'),
                     ),
                   ],
                 ),
@@ -705,7 +713,7 @@ class _ImportPersonaSeedDialogState extends State<_ImportPersonaSeedDialog> {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     return AlertDialog(
-      title: const Text('Import Persona Signing Seed'),
+      title: const Text('Import Backup Key'),
       content: SizedBox(
         width: 440,
         child: Column(
@@ -713,9 +721,8 @@ class _ImportPersonaSeedDialogState extends State<_ImportPersonaSeedDialog> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(
-              'Import a 64-character hex Ed25519 signing seed from another '
-              'device to provision a shared persona. Imported personas start '
-              'in Gated state until a device handoff transfers the voting role.',
+              'Paste a 64-character backup key from another device. Imported '
+              'identities wait for a device transfer before becoming active here.',
               style: theme.textTheme.bodySmall,
             ),
             const SizedBox(height: 12),

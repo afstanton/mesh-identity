@@ -161,6 +161,16 @@ class _EncounterHomeViewState extends State<EncounterHomeView> {
                           key: const Key('home_active_persona_label'),
                           style: Theme.of(context).textTheme.titleLarge,
                         ),
+                        const SizedBox(height: 2),
+                        Text(
+                          'Local label (saved only on this device)',
+                          style: Theme.of(context).textTheme.bodySmall
+                              ?.copyWith(
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant,
+                              ),
+                        ),
                         const SizedBox(height: 4),
                       ],
                       Text(
@@ -250,10 +260,9 @@ class _EncounterHomeViewState extends State<EncounterHomeView> {
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        'Exchange cryptographic Offer, Response, and Reveal payloads '
-                        'between two devices via camera QR scanning, nearby '
-                        'Bluetooth (BLE), or clipboard URI import, then confirm '
-                        'the 6-digit SAS code together.',
+                        'Meet in person to verify each other using a QR code, '
+                        'nearby Bluetooth, or a copied link, then confirm the '
+                        '6-digit match code together.',
                         style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                           color: Theme.of(context).colorScheme.onSurfaceVariant,
                         ),

@@ -96,13 +96,13 @@ class _PracticeEncounterScreenState extends State<PracticeEncounterScreen> {
 
   String _stepSummaryText(PracticeStep step) => switch (step) {
     PracticeStep.offerReady =>
-      'Step 1 of 4: Alice generated Offer (QR 1). Send it to Bob.',
+      'Step 1 of 4: Alice created an invite. Send it to Bob.',
     PracticeStep.responseReady =>
-      'Step 2 of 4: Bob generated Response (QR 2). Send it back to Alice.',
+      'Step 2 of 4: Bob replied. Send his response back to Alice.',
     PracticeStep.revealReady =>
-      'Step 3 of 4: Alice emitted Reveal (QR 3). Send it to Bob.',
+      'Step 3 of 4: Alice is ready to finish. Send her confirmation to Bob.',
     PracticeStep.comparing =>
-      'Step 4 of 4: Compare 6-digit SAS codes and confirm each side manually.',
+      'Step 4 of 4: Compare the 6-digit match codes and confirm each side.',
   };
 
   @override
@@ -290,8 +290,8 @@ class _PracticeEncounterScreenState extends State<PracticeEncounterScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               EncounterPayloadCard(
-                title: 'Alice Reveal (QR 3)',
-                subtitle: 'Alice emits QR 3 so Bob can derive the shared 6-digit SAS code.',
+                title: 'Alice Reveal',
+                subtitle: 'Alice shares her confirmation so Bob can derive the 6-digit match code.',
                 payloadUri: _controller.revealUri!,
                 copyButtonLabel: 'Copy Alice Reveal URI',
               ),

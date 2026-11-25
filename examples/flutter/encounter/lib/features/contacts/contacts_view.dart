@@ -223,8 +223,8 @@ class _ContactsViewState extends State<ContactsView> {
                 icon: Icons.people_outline,
                 title: 'No contacts yet',
                 message:
-                    'Complete an in-person Encounter or import an unverified '
-                    'Ed25519 peer public key to add your first contact.',
+                    'Meet someone in person to verify them, or import a '
+                    'public key to add your first contact.',
                 actionLabel: widget.onStartEncounter == null
                     ? null
                     : 'Start an Encounter',

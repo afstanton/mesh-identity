@@ -206,8 +206,39 @@ class BluetoothLowEnergyTransport implements BleEncounterTransport {
     }
   }
 
+  Future<BluetoothLowEnergyState> _resolveManagerState(
+    BluetoothLowEnergyManager manager, {
+    bool waitPastUnauthorized = false,
+  }) async {
+    var state = manager.state;
+    final shouldWait =
+        state == BluetoothLowEnergyState.unknown ||
+        (waitPastUnauthorized && state == BluetoothLowEnergyState.unauthorized);
+    if (shouldWait) {
+      try {
+        state = await manager.stateChanged
+            .map((e) => e.state)
+            .firstWhere(
+              (s) =>
+                  s != BluetoothLowEnergyState.unknown &&
+                  (!waitPastUnauthorized ||
+                      s != BluetoothLowEnergyState.unauthorized),
+            )
+            .timeout(const Duration(milliseconds: 1500));
+      } catch (_) {
+        // Keep current state if adapter does not broadcast within 1.5s.
+        state = manager.state;
+      }
+    }
+    return state;
+  }
+
   @override
-  Future<void> probeAvailability() async {
+  Future<void> probeAvailability() => _probeAvailabilityInternal();
+
+  Future<void> _probeAvailabilityInternal({
+    bool waitPastUnauthorized = false,
+  }) async {
     if (_isDisposed) return;
     if (!isCentralSupported && !isPeripheralSupported) {
       _setStatus(
@@ -218,34 +249,37 @@ class BluetoothLowEnergyTransport implements BleEncounterTransport {
     }
     try {
       final cm = _central ??= CentralManager();
-      var state = cm.state;
-      if (state == BluetoothLowEnergyState.unknown) {
-        try {
-          state = await cm.stateChanged
-              .map((e) => e.state)
-              .firstWhere((s) => s != BluetoothLowEnergyState.unknown)
-              .timeout(const Duration(milliseconds: 1500));
-        } catch (_) {
-          // Keep current state if adapter does not broadcast within 1.5s.
-        }
+      final centralState = await _resolveManagerState(
+        cm,
+        waitPastUnauthorized: waitPastUnauthorized,
+      );
+      BluetoothLowEnergyState? peripheralState;
+      if (Platform.isAndroid && isPeripheralSupported) {
+        final pm = _peripheral ??= PeripheralManager();
+        peripheralState = await _resolveManagerState(
+          pm,
+          waitPastUnauthorized: waitPastUnauthorized,
+        );
       }
       if (_isDisposed) return;
-      if (state == BluetoothLowEnergyState.unsupported) {
+
+      final states = <BluetoothLowEnergyState>[centralState, ?peripheralState];
+      if (states.contains(BluetoothLowEnergyState.unsupported)) {
         _setStatus(
           BleTransportStatus.unsupported,
           'Bluetooth Low Energy is not supported on this device.',
         );
-      } else if (state == BluetoothLowEnergyState.poweredOff) {
-        _setStatus(
-          BleTransportStatus.bluetoothOff,
-          'Turn on Bluetooth to exchange Encounter payloads nearby.',
-        );
-      } else if (state == BluetoothLowEnergyState.unauthorized) {
+      } else if (states.contains(BluetoothLowEnergyState.unauthorized)) {
         _setStatus(
           BleTransportStatus.permissionDenied,
           'Bluetooth permission is required for nearby BLE exchange.',
         );
-      } else if (state == BluetoothLowEnergyState.poweredOn &&
+      } else if (states.contains(BluetoothLowEnergyState.poweredOff)) {
+        _setStatus(
+          BleTransportStatus.bluetoothOff,
+          'Turn on Bluetooth to exchange Encounter payloads nearby.',
+        );
+      } else if (states.every((s) => s == BluetoothLowEnergyState.poweredOn) &&
           (_status == BleTransportStatus.permissionDenied ||
               _status == BleTransportStatus.bluetoothOff ||
               _status == BleTransportStatus.unsupported)) {
@@ -263,22 +297,37 @@ class BluetoothLowEnergyTransport implements BleEncounterTransport {
   Future<void> requestPermission() async {
     if (_isDisposed) return;
     if (!isCentralSupported && !isPeripheralSupported) return;
+    var waitPastUnauthorized = false;
     try {
       final cm = _central ??= CentralManager();
-      if (cm.state == BluetoothLowEnergyState.unauthorized) {
-        if (Platform.isAndroid) {
-          final granted = await cm.authorize();
-          if (!granted) {
-            await cm.showAppSettings();
-          }
-        } else if (Platform.isIOS) {
-          await cm.showAppSettings();
+      if (Platform.isAndroid) {
+        var centralGranted = cm.state != BluetoothLowEnergyState.unauthorized;
+        if (!centralGranted) {
+          centralGranted = await cm.authorize();
         }
+        var peripheralGranted = true;
+        if (isPeripheralSupported) {
+          final pm = _peripheral ??= PeripheralManager();
+          peripheralGranted = pm.state != BluetoothLowEnergyState.unauthorized;
+          if (!peripheralGranted) {
+            peripheralGranted = await pm.authorize();
+          }
+        }
+        if (!centralGranted || !peripheralGranted) {
+          await cm.showAppSettings();
+        } else {
+          waitPastUnauthorized = true;
+        }
+      } else if (Platform.isIOS &&
+          cm.state == BluetoothLowEnergyState.unauthorized) {
+        await cm.showAppSettings();
       }
     } catch (_) {
       // Best-effort permission request / settings navigation.
     }
-    await probeAvailability();
+    await _probeAvailabilityInternal(
+      waitPastUnauthorized: waitPastUnauthorized,
+    );
   }
 
   @override

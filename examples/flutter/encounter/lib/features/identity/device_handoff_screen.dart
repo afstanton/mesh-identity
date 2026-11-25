@@ -25,13 +25,17 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
   final TextEditingController _inboundBundleController =
       TextEditingController();
 
+  final ScrollController _scrollController = ScrollController();
+
   bool _isBusy = false;
   String? _statusMessage;
   String? _errorMessage;
+  String? _lastScrolledError;
   HandoffBundle? _inspectedInboundBundle;
 
   @override
   void dispose() {
+    _scrollController.dispose();
     _recipientNonceController.dispose();
     _inboundBundleController.dispose();
     super.dispose();
@@ -361,8 +365,22 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_errorMessage == null) {
+      _lastScrolledError = null;
+    } else if (_errorMessage != _lastScrolledError) {
+      _lastScrolledError = _errorMessage;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _scrollController.hasClients) {
+          _scrollController.animateTo(
+            0,
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut,
+          );
+        }
+      });
+    }
     return Scaffold(
-      appBar: AppBar(title: const Text('Device Handoff & Voting Role')),
+      appBar: AppBar(title: const Text('Transfer Device')),
       body: SafeArea(
         child: ListenableBuilder(
           listenable: widget.controller,
@@ -385,6 +403,7 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 820),
                 child: ListView(
+                  controller: _scrollController,
                   padding: const EdgeInsets.all(20),
                   children: [
                     if (encounterActive) ...[
@@ -502,7 +521,7 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
               children: [
                 Expanded(
                   child: Text(
-                    'Active Persona & Device Nonce',
+                    'Device Transfer Status',
                     style: theme.textTheme.titleMedium,
                   ),
                 ),
@@ -743,13 +762,13 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'Receive Voting Role (Inbound Handoff)',
+              'Receive Transfer (Inbound)',
               style: theme.textTheme.titleMedium,
             ),
             const SizedBox(height: 6),
             Text(
               'Paste a `mesh:handoff:` bundle from your previous device, '
-              'inspect its metadata, and accept it to assume the voting role.',
+              'inspect it, and accept to activate this device.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -800,7 +819,7 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
                 ),
                 FilledButton.icon(
                   key: const Key('accept_handoff_button'),
-                  onPressed: actionsDisabled || !hasText || !hasPersona
+                  onPressed: actionsDisabled || preview == null || !hasPersona
                       ? null
                       : _acceptInboundBundle,
                   icon: const Icon(Icons.check_circle_outline, size: 18),

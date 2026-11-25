@@ -259,24 +259,34 @@ class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen>
     if (remaining == null) return const SizedBox.shrink();
     final colorScheme = Theme.of(context).colorScheme;
     final urgent = remaining.inSeconds < 30;
+    final isWaitingOffer =
+        session.phase == EncounterPhase.responderAwaitingOffer;
+    final labelText = isWaitingOffer
+        ? 'Waiting · ${formatCountdown(remaining)}'
+        : formatCountdown(remaining);
     return Padding(
       padding: const EdgeInsets.only(right: 4),
-      child: Chip(
-        key: const Key('encounter_expiry_chip'),
-        avatar: Icon(
-          Icons.timer_outlined,
-          size: 16,
-          color: urgent ? colorScheme.error : colorScheme.onSurfaceVariant,
-        ),
-        label: Text(
-          formatCountdown(remaining),
-          style: TextStyle(
-            fontFamily: 'monospace',
-            fontWeight: FontWeight.w600,
-            color: urgent ? colorScheme.error : null,
+      child: Tooltip(
+        message: isWaitingOffer
+            ? 'Session expires in ${formatCountdown(remaining)} — scan or paste your peer\'s code'
+            : 'Session time remaining',
+        child: Chip(
+          key: const Key('encounter_expiry_chip'),
+          avatar: Icon(
+            Icons.timer_outlined,
+            size: 16,
+            color: urgent ? colorScheme.error : colorScheme.onSurfaceVariant,
           ),
+          label: Text(
+            labelText,
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontWeight: FontWeight.w600,
+              color: urgent ? colorScheme.error : null,
+            ),
+          ),
+          visualDensity: VisualDensity.compact,
         ),
-        visualDensity: VisualDensity.compact,
       ),
     );
   }

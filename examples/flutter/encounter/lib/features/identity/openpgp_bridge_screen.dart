@@ -50,12 +50,16 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
   OpenPgpProvenance? _peerProvenance;
   OpenPgpProvenance? _ownedProvenance;
 
+  final ScrollController _scrollController = ScrollController();
+
   bool _isBusy = false;
   String? _errorMessage;
+  String? _lastScrolledError;
   String? _statusMessage;
 
   @override
   void dispose() {
+    _scrollController.dispose();
     _disposeActivePreview();
     _ownedCertController.clear();
     _ownedPassphraseController.clear();
@@ -346,6 +350,20 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (_errorMessage == null) {
+      _lastScrolledError = null;
+    } else if (_errorMessage != _lastScrolledError) {
+      _lastScrolledError = _errorMessage;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _scrollController.hasClients) {
+          _scrollController.animateTo(
+            0,
+            duration: const Duration(milliseconds: 250),
+            curve: Curves.easeOut,
+          );
+        }
+      });
+    }
     return Scaffold(
       appBar: AppBar(title: const Text('OpenPGP Interoperability Bridge')),
       body: ListenableBuilder(
@@ -362,6 +380,7 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
               constraints: const BoxConstraints(maxWidth: 820),
               child: ListView(
                 key: const Key('openpgp_scroll_view'),
+                controller: _scrollController,
                 padding: const EdgeInsets.all(20),
                 children: [
                   if (encounterActive) ...[
@@ -517,16 +536,32 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
               'Export & Cross-Certify Active Persona',
               style: theme.textTheme.titleMedium,
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
+            Container(
+              key: const Key('openpgp_upfront_privacy_note'),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: theme.colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                'Privacy notice: Exporting embeds your User ID and public key '
+                'into a portable OpenPGP certificate.',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
+            ),
+            const SizedBox(height: 10),
             SegmentedButton<OpenPgpProfile>(
               segments: const [
                 ButtonSegment(
                   value: OpenPgpProfile.v4,
-                  label: Text('v4 (EdDSALegacy)'),
+                  label: Text('v4 (Classic)', maxLines: 1, softWrap: false),
                 ),
                 ButtonSegment(
                   value: OpenPgpProfile.v6,
-                  label: Text('v6 (RFC 9580)'),
+                  label: Text('v6 (Modern)', maxLines: 1, softWrap: false),
                 ),
               ],
               selected: {_selectedProfile},
@@ -536,6 +571,15 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
                       _selectedProfile = s.first;
                       _disposeActivePreview();
                     }),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _selectedProfile == OpenPgpProfile.v4
+                  ? 'v4 (Classic): Best compatibility with GnuPG and existing PGP tools.'
+                  : 'v6 (Modern): Newer RFC 9580 format for modern OpenPGP clients.',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: 10),
             TextField(
@@ -555,7 +599,11 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
               enabled: !actionsDisabled,
               onChanged: (_) => _invalidatePreviewIfActive(),
               decoration: const InputDecoration(
-                labelText: 'Document to Detached-Sign',
+                labelText: 'Text to Sign (optional)',
+                helperText:
+                    'Creates a separate signature file so others can verify '
+                    'this text came from your key.',
+                helperMaxLines: 2,
                 border: OutlineInputBorder(),
               ),
             ),

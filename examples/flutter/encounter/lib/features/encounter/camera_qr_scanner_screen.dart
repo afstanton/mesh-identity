@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter_zxing/flutter_zxing.dart';
 import 'package:material_ui/material_ui.dart';
@@ -93,6 +95,8 @@ class _CameraQrScannerScreenState extends State<CameraQrScannerScreen> {
 
   bool _hasCompleted = false;
   bool _permissionDenied = false;
+  bool _controllerReady = false;
+  Timer? _initTimeoutTimer;
   String? _cameraError;
   String? _scanHint;
 
@@ -100,6 +104,13 @@ class _CameraQrScannerScreenState extends State<CameraQrScannerScreen> {
   void initState() {
     super.initState();
     widget.sessionListenable?.addListener(_onSessionChanged);
+    _initTimeoutTimer = Timer(const Duration(seconds: 2), () {
+      if (!mounted || _controllerReady || _cameraError != null) return;
+      setState(() {
+        _cameraError =
+            'Camera unavailable on this device. Use manual paste instead.';
+      });
+    });
   }
 
   @override
@@ -113,6 +124,7 @@ class _CameraQrScannerScreenState extends State<CameraQrScannerScreen> {
 
   @override
   void dispose() {
+    _initTimeoutTimer?.cancel();
     widget.sessionListenable?.removeListener(_onSessionChanged);
     super.dispose();
   }
@@ -144,16 +156,28 @@ class _CameraQrScannerScreenState extends State<CameraQrScannerScreen> {
     CameraController? controller,
     Exception? error,
   ) {
-    if (error == null || !mounted) return;
-    final isPermission = _isPermissionException(error);
-    setState(() {
-      _permissionDenied = isPermission;
-      _cameraError = isPermission
-          ? 'Camera permission was denied. Check system settings to allow '
-                'camera access, or paste the Encounter URI manually.'
-          : 'Unable to start camera ($error). Check system settings or '
-                'paste the Encounter URI manually instead.';
-    });
+    if (!mounted) return;
+    _initTimeoutTimer?.cancel();
+    if (error != null) {
+      final isPermission = _isPermissionException(error);
+      setState(() {
+        _permissionDenied = isPermission;
+        _cameraError = isPermission
+            ? 'Camera permission was denied. Check system settings to allow '
+                  'camera access, or paste the Encounter URI manually.'
+            : 'Unable to start camera ($error). Check system settings or '
+                  'paste the Encounter URI manually instead.';
+      });
+      return;
+    }
+    if (controller == null) {
+      setState(() {
+        _cameraError =
+            'Camera unavailable on this device. Use manual paste instead.';
+      });
+      return;
+    }
+    setState(() => _controllerReady = true);
   }
 
   void _handleScan(Code result) {
@@ -248,41 +272,49 @@ class _CameraQrScannerScreenState extends State<CameraQrScannerScreen> {
                         ),
                       ),
                     )
-                  : Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        ReaderWidget(
-                          codeFormat: Format.qrCode,
-                          resolution: _resolution,
-                          showGallery: false,
-                          tryRotate: true,
-                          onControllerCreated: _handleControllerCreated,
-                          onScan: _handleScan,
-                        ),
-                        if (_scanHint != null)
-                          Positioned(
-                            left: 16,
-                            right: 16,
-                            top: 16,
-                            child: Material(
-                              color: theme.colorScheme.errorContainer,
-                              borderRadius: BorderRadius.circular(10),
-                              child: Padding(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 14,
-                                  vertical: 10,
-                                ),
-                                child: Text(
-                                  _scanHint!,
-                                  textAlign: TextAlign.center,
-                                  style: theme.textTheme.bodySmall?.copyWith(
-                                    color: theme.colorScheme.onErrorContainer,
+                  : ColoredBox(
+                      color: Colors.black,
+                      child: Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          ReaderWidget(
+                            codeFormat: Format.qrCode,
+                            resolution: _resolution,
+                            showGallery: false,
+                            tryRotate: true,
+                            scannerOverlay: const ScannerOverlayBorder(
+                              borderColor: Colors.white,
+                              borderWidth: 4,
+                              overlayColor: Color(0x66000000),
+                            ),
+                            onControllerCreated: _handleControllerCreated,
+                            onScan: _handleScan,
+                          ),
+                          if (_scanHint != null)
+                            Positioned(
+                              left: 16,
+                              right: 16,
+                              top: 16,
+                              child: Material(
+                                color: theme.colorScheme.errorContainer,
+                                borderRadius: BorderRadius.circular(10),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 10,
+                                  ),
+                                  child: Text(
+                                    _scanHint!,
+                                    textAlign: TextAlign.center,
+                                    style: theme.textTheme.bodySmall?.copyWith(
+                                      color: theme.colorScheme.onErrorContainer,
+                                    ),
                                   ),
                                 ),
                               ),
                             ),
-                          ),
-                      ],
+                        ],
+                      ),
                     ),
             ),
             SafeArea(

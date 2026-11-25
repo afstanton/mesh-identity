@@ -462,6 +462,33 @@ class _ContactDetailDialogState extends State<_ContactDetailDialog> {
     }
   }
 
+  static const List<String> _months = [
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+
+  static String _formatRecordedTimestamp(DateTime dt) {
+    if (dt.millisecondsSinceEpoch == 0) {
+      return 'Not verified yet';
+    }
+    final local = dt.toLocal();
+    final month = _months[local.month - 1];
+    final hour12 = local.hour % 12 == 0 ? 12 : local.hour % 12;
+    final minute = local.minute.toString().padLeft(2, '0');
+    final period = local.hour >= 12 ? 'PM' : 'AM';
+    return '${local.day} $month ${local.year}, $hour12:$minute $period';
+  }
+
   Future<void> _saveAlias() async {
     final trimmed = _aliasController.text.trim();
     if (trimmed.isEmpty) {
@@ -507,12 +534,17 @@ class _ContactDetailDialogState extends State<_ContactDetailDialog> {
   }
 
   Future<void> _blockContact() async {
+    final alias = _contact.alias?.trim();
+    final shortHex = shortHexKey(_contact.peerPublicKey);
+    final label = (alias != null && alias.isNotEmpty)
+        ? '$alias ($shortHex)'
+        : shortHex;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (dialogContext) => AlertDialog(
         title: const Text('Block contact?'),
         content: Text(
-          'Blocking ${shortHexKey(_contact.peerPublicKey)} prevents future '
+          'Blocking $label prevents future '
           'encounters with this peer until you unblock them.',
         ),
         actions: [
@@ -650,9 +682,14 @@ class _ContactDetailDialogState extends State<_ContactDetailDialog> {
                 label: 'Encounters',
                 value: '${_contact.encounterCount}',
               ),
-              _DetailRow(
-                label: 'Recorded (UTC)',
-                value: _contact.verifiedAt.toUtc().toIso8601String(),
+              Tooltip(
+                message: _contact.verifiedAt.millisecondsSinceEpoch == 0
+                    ? 'Imported unverified key'
+                    : 'UTC: ${_contact.verifiedAt.toUtc().toIso8601String()}',
+                child: _DetailRow(
+                  label: 'Recorded',
+                  value: _formatRecordedTimestamp(_contact.verifiedAt),
+                ),
               ),
               const SizedBox(height: 16),
               TextField(
@@ -786,7 +823,7 @@ class _ImportPeerKeyDialogState extends State<_ImportPeerKeyDialog> {
       Navigator.of(context).pop(contact);
     } on FormatException catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = e.message);
+      setState(() => _errorMessage = e.message.replaceAll('Ed25519 ', ''));
     } on MeshIdentityException catch (e) {
       if (!mounted) return;
       setState(() => _errorMessage = e.message);
@@ -824,11 +861,14 @@ class _ImportPeerKeyDialogState extends State<_ImportPeerKeyDialog> {
               controller: _hexController,
               enabled: !_isBusy,
               maxLines: 2,
+              onChanged: (_) => setState(() => _errorMessage = null),
               style: AppTheme.monospaceStyle(context),
-              decoration: const InputDecoration(
-                labelText: 'Peer Public Key (64 hex chars)',
+              decoration: InputDecoration(
+                labelText: 'Peer Public Key (64 characters)',
                 hintText: '0123abcd...',
-                border: OutlineInputBorder(),
+                counterText:
+                    '${_hexController.text.replaceAll(RegExp(r'\s+'), '').length} / 64 characters',
+                border: const OutlineInputBorder(),
               ),
             ),
             if (_errorMessage != null) ...[

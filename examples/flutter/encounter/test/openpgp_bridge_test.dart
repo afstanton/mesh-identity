@@ -537,6 +537,16 @@ void main() {
       await tester.tap(find.byKey(const Key('openpgp_import_owned_button')));
       await tester.pumpAndSettle();
 
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('openpgp_owned_provenance_card')),
+        300,
+        scrollable: find
+            .descendant(
+              of: find.byKey(const Key('openpgp_scroll_view')),
+              matching: find.byType(Scrollable),
+            )
+            .first,
+      );
       expect(
         find.byKey(const Key('openpgp_owned_provenance_card')),
         findsOneWidget,

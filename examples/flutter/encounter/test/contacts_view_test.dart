@@ -68,7 +68,7 @@ void main() {
     await tester.tap(find.byKey(const Key('confirm_import_peer_key_button')));
     await tester.pumpAndSettle();
     expect(
-      find.text('Enter a 64-character hexadecimal Ed25519 public key.'),
+      find.text('Enter a 64-character hexadecimal public key.'),
       findsOneWidget,
     );
 
@@ -223,4 +223,54 @@ void main() {
       now.add(EncounterUiText.rateLimitPause),
     );
   });
+
+  testWidgets(
+    'ContactsView shows Not verified yet for epoch-0 imported contact and live 64-char counter in Import Peer Key',
+    (tester) async {
+      final controller = IdentityController(
+        keyring: InMemoryKeyringService(),
+        storage: InMemorySnapshotStorageService(),
+        clock: _FakeClock().call,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+
+      await tester.pumpWidget(_wrap(controller));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('import_peer_key_button')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('0 / 64 characters'), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const Key('import_peer_key_field')),
+        'abcd',
+      );
+      await tester.pump();
+      expect(find.text('4 / 64 characters'), findsOneWidget);
+
+      await tester.tap(find.byKey(const Key('confirm_import_peer_key_button')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('64-character'), findsOneWidget);
+
+      // Editing clears the validation error.
+      final validPeerKey = _validPeerPublicKey(0x33);
+      final validPeerHex = formatHexKey(validPeerKey);
+      await tester.enterText(
+        find.byKey(const Key('import_peer_key_field')),
+        validPeerHex,
+      );
+      await tester.pump();
+      expect(find.text('64 / 64 characters'), findsOneWidget);
+      expect(find.textContaining('64-character'), findsNothing);
+
+      await tester.tap(find.byKey(const Key('confirm_import_peer_key_button')));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text(shortHexKey(validPeerKey)));
+      await tester.pumpAndSettle();
+      expect(find.text('Not verified yet'), findsOneWidget);
+      expect(find.textContaining('1970-01-01'), findsNothing);
+    },
+  );
 }

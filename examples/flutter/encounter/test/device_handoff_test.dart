@@ -573,4 +573,38 @@ void main() {
       expect(find.text('Awaiting transfer approval'), findsNWidgets(2));
     },
   );
+
+  testWidgets(
+    'DeviceHandoffScreen keeps Accept Handoff disabled until Inspect Bundle succeeds',
+    (tester) async {
+      final controller = IdentityController(
+        keyring: InMemoryKeyringService(),
+        storage: InMemorySnapshotStorageService(),
+      );
+      await controller.initialize();
+      addTearDown(controller.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(home: DeviceHandoffScreen(controller: controller)),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.scrollUntilVisible(
+        find.byKey(const Key('accept_handoff_button')),
+        200,
+        scrollable: find.byType(Scrollable).first,
+      );
+
+      await tester.enterText(
+        find.byKey(const Key('handoff_bundle_input_field')),
+        'mesh:handoff:not-a-valid-bundle',
+      );
+      await tester.pump();
+
+      final acceptBtn = tester.widget<FilledButton>(
+        find.byKey(const Key('accept_handoff_button')),
+      );
+      expect(acceptBtn.onPressed, isNull);
+    },
+  );
 }

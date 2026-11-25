@@ -113,7 +113,8 @@ class BleEncounterPanel extends StatelessWidget {
                   key: const Key('ble_toggle_button'),
                   onPressed:
                       status == BleTransportStatus.exchanging ||
-                          status == BleTransportStatus.connecting
+                          status == BleTransportStatus.connecting ||
+                          status == BleTransportStatus.unsupported
                       ? null
                       : onToggleBle,
                   icon: Icon(

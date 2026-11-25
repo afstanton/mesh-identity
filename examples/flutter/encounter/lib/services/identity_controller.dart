@@ -57,6 +57,8 @@ class IdentityController extends ChangeNotifier {
 
   final Map<String, String> _personaLabels = {};
   final Map<String, String> _groupNames = {};
+  bool _labelsLoadFailed = false;
+  static const int maxLocalLabelLength = 64;
 
   MeshGroupHandle? _groupHandle;
   IdentityStatus _status = IdentityStatus.uninitialized;
@@ -214,32 +216,88 @@ class IdentityController extends ChangeNotifier {
       _personaLabels[_bytesToHex(identityKey)];
 
   /// Set or clear a local display label for [identityKey] persona.
-  Future<void> setPersonaLabel(Uint8List identityKey, String? label) async {
-    final hex = _bytesToHex(identityKey);
-    final trimmed = label?.trim();
-    if (trimmed == null || trimmed.isEmpty) {
-      _personaLabels.remove(hex);
-    } else {
-      _personaLabels[hex] = trimmed;
-    }
-    await _labelsService.saveAll(personas: _personaLabels, groups: _groupNames);
-    _notifySafely();
+  Future<void> setPersonaLabel(Uint8List identityKey, String? label) {
+    return _serialized(() async {
+      if (_labelsLoadFailed) {
+        throw StateError(
+          'Local labels file could not be read; refusing to overwrite existing labels.',
+        );
+      }
+      final hex = _bytesToHex(identityKey);
+      final trimmed = label?.trim();
+      if (trimmed != null && trimmed.length > maxLocalLabelLength) {
+        throw ArgumentError.value(
+          trimmed.length,
+          'label.length',
+          'Display name must be at most $maxLocalLabelLength characters.',
+        );
+      }
+      final hadPrevious = _personaLabels.containsKey(hex);
+      final previous = _personaLabels[hex];
+      if (trimmed == null || trimmed.isEmpty) {
+        _personaLabels.remove(hex);
+      } else {
+        _personaLabels[hex] = trimmed;
+      }
+      try {
+        await _labelsService.saveAll(
+          personas: _personaLabels,
+          groups: _groupNames,
+        );
+      } catch (_) {
+        if (hadPrevious && previous != null) {
+          _personaLabels[hex] = previous;
+        } else {
+          _personaLabels.remove(hex);
+        }
+        rethrow;
+      }
+      _notifySafely();
+    });
   }
 
   /// Optional local display name for [groupId].
   String? groupName(BigInt groupId) => _groupNames[groupId.toString()];
 
   /// Set or clear a local display name for [groupId].
-  Future<void> setGroupName(BigInt groupId, String? name) async {
-    final key = groupId.toString();
-    final trimmed = name?.trim();
-    if (trimmed == null || trimmed.isEmpty) {
-      _groupNames.remove(key);
-    } else {
-      _groupNames[key] = trimmed;
-    }
-    await _labelsService.saveAll(personas: _personaLabels, groups: _groupNames);
-    _notifySafely();
+  Future<void> setGroupName(BigInt groupId, String? name) {
+    return _serialized(() async {
+      if (_labelsLoadFailed) {
+        throw StateError(
+          'Local labels file could not be read; refusing to overwrite existing labels.',
+        );
+      }
+      final key = groupId.toString();
+      final trimmed = name?.trim();
+      if (trimmed != null && trimmed.length > maxLocalLabelLength) {
+        throw ArgumentError.value(
+          trimmed.length,
+          'name.length',
+          'Group name must be at most $maxLocalLabelLength characters.',
+        );
+      }
+      final hadPrevious = _groupNames.containsKey(key);
+      final previous = _groupNames[key];
+      if (trimmed == null || trimmed.isEmpty) {
+        _groupNames.remove(key);
+      } else {
+        _groupNames[key] = trimmed;
+      }
+      try {
+        await _labelsService.saveAll(
+          personas: _personaLabels,
+          groups: _groupNames,
+        );
+      } catch (_) {
+        if (hadPrevious && previous != null) {
+          _groupNames[key] = previous;
+        } else {
+          _groupNames.remove(key);
+        }
+        rethrow;
+      }
+      _notifySafely();
+    });
   }
 
   /// Look up a contact record by [peerPublicKey] on the selected persona.
@@ -361,14 +419,19 @@ class IdentityController extends ChangeNotifier {
     _notifySafely();
 
     try {
-      final labels = await _labelsService.loadAll();
-      if (_isDisposed) return;
-      _personaLabels
-        ..clear()
-        ..addAll(labels.personas);
-      _groupNames
-        ..clear()
-        ..addAll(labels.groups);
+      _labelsLoadFailed = false;
+      try {
+        final labels = await _labelsService.loadAll();
+        if (_isDisposed) return;
+        _personaLabels
+          ..clear()
+          ..addAll(labels.personas);
+        _groupNames
+          ..clear()
+          ..addAll(labels.groups);
+      } catch (_) {
+        _labelsLoadFailed = true;
+      }
 
       final hasSnapshot = await _storage.hasSnapshot();
       if (_isDisposed) return;
@@ -812,8 +875,19 @@ class IdentityController extends ChangeNotifier {
         _notifySafely();
       }
 
-      // Clean up any stale pending handoff bundle for the removed persona.
-      _pendingOutboundHandoffs.remove(_bytesToHex(identityKey));
+      // Clean up any stale pending handoff bundle and local label for the removed persona.
+      final removedHex = _bytesToHex(identityKey);
+      _pendingOutboundHandoffs.remove(removedHex);
+      if (_personaLabels.remove(removedHex) != null && !_labelsLoadFailed) {
+        try {
+          await _labelsService.saveAll(
+            personas: _personaLabels,
+            groups: _groupNames,
+          );
+        } catch (_) {
+          // Best-effort label cleanup.
+        }
+      }
       try {
         await _handoffOutbox.deletePendingBundle(identityKey);
       } catch (_) {
@@ -1149,6 +1223,14 @@ class IdentityController extends ChangeNotifier {
       _unreadableOutboxPersonas.clear();
       _outboxLoadError = null;
       await _keyring.clear();
+      _personaLabels.clear();
+      _groupNames.clear();
+      _labelsLoadFailed = false;
+      try {
+        await _labelsService.saveAll(personas: const {}, groups: const {});
+      } catch (_) {
+        // Best-effort label reset.
+      }
       await _initializeInternal();
       return archivedPath;
     });

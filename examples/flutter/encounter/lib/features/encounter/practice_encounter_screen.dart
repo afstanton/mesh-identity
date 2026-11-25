@@ -188,7 +188,7 @@ class _PracticeEncounterScreenState extends State<PracticeEncounterScreen> {
                         padding: const EdgeInsets.fromLTRB(20, 16, 20, 20),
                         child: LayoutBuilder(
                           builder: (context, constraints) {
-                            final sideBySide = constraints.maxWidth >= 840;
+                            final sideBySide = constraints.maxWidth >= 700;
                             final alicePane = _buildAlicePane(context);
                             final bobPane = _buildBobPane(context);
                             if (sideBySide) {

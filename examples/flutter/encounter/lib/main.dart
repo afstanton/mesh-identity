@@ -180,6 +180,17 @@ class _EncounterAppState extends State<EncounterApp> {
     return '$hex...';
   }
 
+  static String? _activePersonaHeaderLabel(IdentityController controller) {
+    final selected = controller.selectedIdentity;
+    final short = _shortFingerprint(selected);
+    if (selected == null || short == null) return short;
+    final label = controller.personaLabel(selected);
+    if (label != null && label.isNotEmpty) {
+      return '$label ($short)';
+    }
+    return short;
+  }
+
   Widget _buildDestinationBody() {
     return switch (_selectedDestination) {
       AppDestination.encounter => EncounterHomeView(
@@ -235,8 +246,8 @@ class _EncounterAppState extends State<EncounterApp> {
                     });
                   },
                   themeController: _themeController,
-                  activePersonaFingerprint: _shortFingerprint(
-                    _controller.selectedIdentity,
+                  activePersonaFingerprint: _activePersonaHeaderLabel(
+                    _controller,
                   ),
                   body: _buildDestinationBody(),
                 ),

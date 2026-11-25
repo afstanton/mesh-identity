@@ -43,6 +43,7 @@ class _IdentityViewState extends State<IdentityView> {
         title: const Text('Create Persona'),
         content: TextField(
           key: const Key('persona_name_field'),
+          maxLength: IdentityController.maxLocalLabelLength,
           onChanged: (value) => label = value,
           decoration: const InputDecoration(
             labelText: 'Display name (optional)',
@@ -72,11 +73,21 @@ class _IdentityViewState extends State<IdentityView> {
     });
     try {
       final created = await widget.controller.addPersona();
+      String? labelError;
       if (trimmed.isNotEmpty) {
-        await widget.controller.setPersonaLabel(created, trimmed);
+        try {
+          await widget.controller.setPersonaLabel(created, trimmed);
+        } catch (e) {
+          labelError = 'Persona created, but saving the local name failed: $e';
+        }
       }
       if (!mounted) return;
-      final display = trimmed.isNotEmpty ? trimmed : shortHexKey(created);
+      final display = (trimmed.isNotEmpty && labelError == null)
+          ? trimmed
+          : shortHexKey(created);
+      if (labelError != null) {
+        setState(() => _errorMessage = labelError);
+      }
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('Added persona $display')));
     } on MeshIdentityException catch (e) {
@@ -99,6 +110,7 @@ class _IdentityViewState extends State<IdentityView> {
         content: TextFormField(
           key: const Key('rename_persona_field'),
           initialValue: label,
+          maxLength: IdentityController.maxLocalLabelLength,
           onChanged: (value) => label = value,
           decoration: const InputDecoration(
             labelText: 'Display name (local only)',
@@ -500,11 +512,14 @@ class _IdentityViewState extends State<IdentityView> {
                               ),
                             ),
                             if (votingRecord != null)
-                              Text(
-                                'Role: ${_votingStateLabel(votingRecord.state)} '
-                                '(Counter ${votingRecord.counter})',
-                                style: theme.textTheme.bodySmall?.copyWith(
-                                  color: theme.colorScheme.onSurfaceVariant,
+                              Tooltip(
+                                message: 'Active signing role for this device',
+                                child: Text(
+                                  'Role: ${_votingStateLabel(votingRecord.state)} '
+                                  '(Counter ${votingRecord.counter})',
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
                                 ),
                               ),
                           ],
@@ -571,13 +586,16 @@ class _IdentityViewState extends State<IdentityView> {
                       style: theme.textTheme.titleMedium,
                     ),
                     const SizedBox(height: 6),
-                    Text(
-                      widget.controller.deviceNonce == null
-                          ? 'Device nonce: not generated yet.'
-                          : 'Device nonce: ${shortHexKey(widget.controller.deviceNonce!)}',
-                      style: AppTheme.monospaceStyle(context).copyWith(
-                        fontSize: 12,
-                        color: theme.colorScheme.onSurfaceVariant,
+                    Tooltip(
+                      message: 'Unique per-device transfer token',
+                      child: Text(
+                        widget.controller.deviceNonce == null
+                            ? 'Device nonce: not generated yet.'
+                            : 'Device nonce: ${shortHexKey(widget.controller.deviceNonce!)}',
+                        style: AppTheme.monospaceStyle(context).copyWith(
+                          fontSize: 12,
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
                       ),
                     ),
                     const SizedBox(height: 12),

@@ -216,17 +216,29 @@ class BluetoothLowEnergyTransport implements BleEncounterTransport {
     }
     try {
       final cm = _central ??= CentralManager();
-      if (cm.state == BluetoothLowEnergyState.unsupported) {
+      var state = cm.state;
+      if (state == BluetoothLowEnergyState.unknown) {
+        try {
+          state = await cm.stateChanged
+              .map((e) => e.state)
+              .firstWhere((s) => s != BluetoothLowEnergyState.unknown)
+              .timeout(const Duration(milliseconds: 1500));
+        } catch (_) {
+          // Keep current state if adapter does not broadcast within 1.5s.
+        }
+      }
+      if (_isDisposed) return;
+      if (state == BluetoothLowEnergyState.unsupported) {
         _setStatus(
           BleTransportStatus.unsupported,
           'Bluetooth Low Energy is not supported on this device.',
         );
-      } else if (cm.state == BluetoothLowEnergyState.poweredOff) {
+      } else if (state == BluetoothLowEnergyState.poweredOff) {
         _setStatus(
           BleTransportStatus.bluetoothOff,
           'Turn on Bluetooth to exchange Encounter payloads nearby.',
         );
-      } else if (cm.state == BluetoothLowEnergyState.unauthorized) {
+      } else if (state == BluetoothLowEnergyState.unauthorized) {
         _setStatus(
           BleTransportStatus.permissionDenied,
           'Bluetooth permission is required for nearby BLE exchange.',

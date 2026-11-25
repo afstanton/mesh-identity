@@ -107,6 +107,9 @@ class _EncounterHomeViewState extends State<EncounterHomeView> {
   @override
   Widget build(BuildContext context) {
     final selectedKey = widget.controller.selectedIdentity;
+    final selectedLabel = selectedKey == null
+        ? null
+        : widget.controller.personaLabel(selectedKey);
     final fullHex = selectedKey == null
         ? 'Unavailable'
         : formatHexKey(selectedKey);
@@ -151,11 +154,24 @@ class _EncounterHomeViewState extends State<EncounterHomeView> {
                         ],
                       ),
                       const SizedBox(height: 12),
+                      if (selectedLabel != null &&
+                          selectedLabel.isNotEmpty) ...[
+                        Text(
+                          selectedLabel,
+                          key: const Key('home_active_persona_label'),
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                        const SizedBox(height: 4),
+                      ],
                       Text(
                         shortHex,
-                        style: AppTheme.monospaceStyle(
-                          context,
-                        ).copyWith(fontSize: 18, fontWeight: FontWeight.w600),
+                        style: AppTheme.monospaceStyle(context).copyWith(
+                          fontSize:
+                              selectedLabel != null && selectedLabel.isNotEmpty
+                              ? 14
+                              : 18,
+                          fontWeight: FontWeight.w600,
+                        ),
                       ),
                       const SizedBox(height: 8),
                       SelectableText(

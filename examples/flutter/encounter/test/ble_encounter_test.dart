@@ -516,4 +516,43 @@ void main() {
       );
     },
   );
+
+  testWidgets(
+    'TwoDeviceEncounterScreen disables BLE toggle button when BLE is unsupported',
+    (tester) async {
+      final bob = IdentityController(
+        keyring: InMemoryKeyringService(),
+        storage: InMemorySnapshotStorageService(),
+        handoffOutbox: InMemoryHandoffOutboxService(),
+      );
+      await bob.initialize();
+      addTearDown(bob.dispose);
+
+      final channel = InMemoryBleChannel();
+      final unsupportedBle = channel.createResponderTransport(
+        forcedErrorStatus: BleTransportStatus.unsupported,
+        forcedErrorMessage:
+            'Bluetooth Low Energy is not supported on this device.',
+      );
+      addTearDown(unsupportedBle.dispose);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: TwoDeviceEncounterScreen(
+            controller: bob,
+            initialRole: EncounterRole.responder,
+            qrScanner: FakeQrScannerService(isCameraSupported: false),
+            bleTransport: unsupportedBle,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('BLE unavailable on this platform'), findsOneWidget);
+      final toggle = tester.widget<FilledButton>(
+        find.byKey(const Key('ble_toggle_button')),
+      );
+      expect(toggle.onPressed, isNull);
+    },
+  );
 }

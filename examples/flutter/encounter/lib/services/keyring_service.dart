@@ -55,40 +55,53 @@ Uint8List? _tryHexToBytes32(String? hex) {
 /// (iOS/macOS Keychain, Android Keystore, Linux SecretService, Windows CredentialStore).
 class FlutterSecureKeyringService implements SecureKeyringService {
   final FlutterSecureStorage _storage;
+  final FlutterSecureStorage? _legacyMacOsStorage;
   static const String _prefix = 'persona_seed_';
 
   static const String _debugFallbackFileName = 'debug_keyring_fallback.json';
+  static final RegExp _macOsKeychainCodeRegex = RegExp(
+    r'(?:^|\D)-(?:34018|50)(?:\D|$)',
+  );
 
   Future<void> _queue = Future<void>.value();
   bool _useDebugMacOsFallback = false;
   bool _loggedDebugFallback = false;
+  bool _macOsMigrationAttempted = false;
 
-  FlutterSecureKeyringService({FlutterSecureStorage? storage})
-    : _storage =
-          storage ??
-          const FlutterSecureStorage(
-            aOptions: AndroidOptions(),
-            // Use the Data Protection Keychain when accessibility is configured so
-            // macOS SecItem queries do not fail with -50 (errSecParam). Unsigned /
-            // ad-hoc macOS debug builds fall back to a debug-only local file if the
-            // system rejects Data Protection Keychain access (-34018 / -50).
-            mOptions: MacOsOptions(
-              accessibility: KeychainAccessibility.first_unlock_this_device,
-              usesDataProtectionKeychain: true,
-            ),
-            // Bind signing keys to this device so backups cannot restore keys without
-            // explicit handoff/voting-lock migration.
-            iOptions: IOSOptions(
-              accessibility: KeychainAccessibility.first_unlock_this_device,
-            ),
-          );
+  FlutterSecureKeyringService({
+    FlutterSecureStorage? storage,
+    FlutterSecureStorage? legacyMacOsStorage,
+  }) : _storage =
+           storage ??
+           const FlutterSecureStorage(
+             aOptions: AndroidOptions(),
+             // Use the Data Protection Keychain when accessibility is configured so
+             // macOS SecItem queries do not fail with -50 (errSecParam). Unsigned /
+             // ad-hoc macOS debug builds fall back to a debug-only local file if the
+             // system rejects Data Protection Keychain access (-34018 / -50).
+             mOptions: MacOsOptions(
+               accessibility: KeychainAccessibility.first_unlock_this_device,
+               usesDataProtectionKeychain: true,
+             ),
+             // Bind signing keys to this device so backups cannot restore keys without
+             // explicit handoff/voting-lock migration.
+             iOptions: IOSOptions(
+               accessibility: KeychainAccessibility.first_unlock_this_device,
+             ),
+           ),
+       _legacyMacOsStorage =
+           legacyMacOsStorage ??
+           (Platform.isMacOS
+               ? const FlutterSecureStorage(
+                   mOptions: MacOsOptions(usesDataProtectionKeychain: false),
+                 )
+               : null);
 
   static bool _isMacOsKeychainAccessError(Object error) {
     if (!Platform.isMacOS || !kDebugMode) return false;
     if (error is! PlatformException) return false;
     final text = '${error.code} ${error.message ?? ''} ${error.details ?? ''}';
-    return text.contains('-34018') ||
-        text.contains('-50') ||
+    return _macOsKeychainCodeRegex.hasMatch(text) ||
         text.contains('errSecMissingEntitlement') ||
         text.contains('errSecParam');
   }
@@ -104,22 +117,66 @@ class FlutterSecureKeyringService implements SecureKeyringService {
   Future<Map<String, String>> _readDebugFallbackMap() async {
     final file = await _debugFallbackFile();
     if (!await file.exists()) return {};
-    try {
-      final raw = await file.readAsString();
-      if (raw.trim().isEmpty) return {};
-      final decoded = jsonDecode(raw);
-      if (decoded is! Map) return {};
-      return decoded.map(
-        (key, value) => MapEntry(key.toString(), value.toString()),
-      );
-    } catch (_) {
-      return {};
+    final raw = await file.readAsString();
+    if (raw.trim().isEmpty) return {};
+    final decoded = jsonDecode(raw);
+    if (decoded is! Map) {
+      throw const FormatException('Corrupted debug keyring fallback format.');
     }
+    return decoded.map(
+      (key, value) => MapEntry(key.toString(), value.toString()),
+    );
   }
 
   Future<void> _writeDebugFallbackMap(Map<String, String> entries) async {
     final file = await _debugFallbackFile();
-    await file.writeAsString(jsonEncode(entries), flush: true);
+    final tmp = File('${file.path}.tmp');
+    await tmp.writeAsString(jsonEncode(entries), flush: true);
+    await tmp.rename(file.path);
+  }
+
+  Future<void> _migrateMacOsKeysIfNeeded() async {
+    if (!Platform.isMacOS || _macOsMigrationAttempted) return;
+    _macOsMigrationAttempted = true;
+
+    // 1. Migrate any legacy login-keychain seeds into Data Protection Keychain.
+    final legacy = _legacyMacOsStorage;
+    if (legacy != null) {
+      try {
+        final legacyEntries = await legacy.readAll();
+        for (final entry in legacyEntries.entries) {
+          if (!entry.key.startsWith(_prefix)) continue;
+          final existing = await _storage.read(key: entry.key);
+          if (existing == null) {
+            await _storage.write(key: entry.key, value: entry.value);
+          }
+          await legacy.delete(key: entry.key);
+        }
+      } catch (_) {
+        // Legacy keychain may be inaccessible on newer macOS releases (-50); ignore.
+      }
+    }
+
+    // 2. In debug builds, migrate any seeds written to debug_keyring_fallback.json
+    // once the real Data Protection Keychain becomes available.
+    if (kDebugMode) {
+      try {
+        final file = await _debugFallbackFile();
+        if (await file.exists()) {
+          final fallbackEntries = await _readDebugFallbackMap();
+          for (final entry in fallbackEntries.entries) {
+            if (!entry.key.startsWith(_prefix)) continue;
+            final existing = await _storage.read(key: entry.key);
+            if (existing == null) {
+              await _storage.write(key: entry.key, value: entry.value);
+            }
+          }
+          await file.delete();
+        }
+      } catch (_) {
+        // Leave debug fallback file intact if migration did not complete.
+      }
+    }
   }
 
   Future<T> _withMacOsDebugFallback<T>(
@@ -130,7 +187,12 @@ class FlutterSecureKeyringService implements SecureKeyringService {
       return fallbackAction();
     }
     try {
-      return await keychainAction();
+      final result = await keychainAction();
+      if (Platform.isMacOS && !_macOsMigrationAttempted) {
+        await _migrateMacOsKeysIfNeeded();
+        return await keychainAction();
+      }
+      return result;
     } catch (e) {
       if (_isMacOsKeychainAccessError(e)) {
         _useDebugMacOsFallback = true;

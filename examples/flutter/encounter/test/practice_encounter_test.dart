@@ -299,5 +299,24 @@ void main() {
         expect(find.textContaining('Verified (UTC):'), findsNothing);
       },
     );
+
+    testWidgets('800px desktop window renders Practice Mode side-by-side', (
+      WidgetTester tester,
+    ) async {
+      tester.view.physicalSize = const Size(800, 684);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
+      await tester.pumpWidget(
+        const MaterialApp(home: PracticeEncounterScreen()),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Alice (Initiator)'), findsOneWidget);
+      expect(find.text('Bob (Responder)'), findsOneWidget);
+    });
   });
 }

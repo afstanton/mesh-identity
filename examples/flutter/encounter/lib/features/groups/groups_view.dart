@@ -99,7 +99,7 @@ class _GroupsViewState extends State<GroupsView> {
   Future<void> _createGroup() async {
     final verifiedContacts = _verifiedActiveContacts;
     final selectedKeys = <String, Uint8List>{};
-    final nameController = TextEditingController();
+    var groupNameInput = '';
 
     final confirmed = await showDialog<bool>(
       context: context,
@@ -121,7 +121,8 @@ class _GroupsViewState extends State<GroupsView> {
                   const SizedBox(height: 12),
                   TextField(
                     key: const Key('group_name_field'),
-                    controller: nameController,
+                    maxLength: IdentityController.maxLocalLabelLength,
+                    onChanged: (value) => groupNameInput = value,
                     decoration: const InputDecoration(
                       labelText: 'Group name (optional)',
                       hintText: 'e.g. Family, Field Team',
@@ -182,8 +183,7 @@ class _GroupsViewState extends State<GroupsView> {
         ),
       ),
     );
-    final groupName = nameController.text.trim();
-    nameController.dispose();
+    final groupName = groupNameInput.trim();
     if (confirmed != true || !mounted) return;
 
     setState(() {
@@ -195,12 +195,20 @@ class _GroupsViewState extends State<GroupsView> {
       final groupId = await widget.groupController.createGroup(
         members: selectedKeys.values.toList(growable: false),
       );
+      String? labelWarning;
       if (groupName.isNotEmpty) {
-        await widget.identityController.setGroupName(groupId, groupName);
+        try {
+          await widget.identityController.setGroupName(groupId, groupName);
+        } catch (e) {
+          labelWarning = 'Group created, but saving the local name failed: $e';
+        }
       }
       if (!mounted) return;
       setState(() {
         _statusMessage = 'Group created.';
+        if (labelWarning != null) {
+          _errorMessage = labelWarning;
+        }
       });
     } on MeshIdentityException catch (e) {
       if (!mounted) return;
@@ -580,13 +588,16 @@ class _GroupsViewState extends State<GroupsView> {
                       spacing: 8,
                       runSpacing: 8,
                       children: [
-                        OutlinedButton.icon(
-                          key: const Key('import_genesis_button'),
-                          onPressed: actionsDisabled
-                              ? null
-                              : _openImportGenesisDialog,
-                          icon: const Icon(Icons.download_outlined),
-                          label: const Text('Import Genesis'),
+                        Tooltip(
+                          message: 'Import initial group record from a peer',
+                          child: OutlinedButton.icon(
+                            key: const Key('import_genesis_button'),
+                            onPressed: actionsDisabled
+                                ? null
+                                : _openImportGenesisDialog,
+                            icon: const Icon(Icons.download_outlined),
+                            label: const Text('Import Genesis'),
+                          ),
                         ),
                         FilledButton.icon(
                           key: const Key('create_group_button'),
@@ -768,6 +779,7 @@ class _GroupsViewState extends State<GroupsView> {
     }
 
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: groupCtrl.groups
           .map(
             (group) => Padding(
@@ -928,6 +940,13 @@ class _GroupsViewState extends State<GroupsView> {
             Text(
               'Two-Phase Outbox (${messages.length})',
               style: theme.textTheme.titleMedium,
+            ),
+            const SizedBox(height: 2),
+            Text(
+              'Pending outgoing group updates waiting to be shared',
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
             const SizedBox(height: 4),
             Text(

@@ -146,6 +146,17 @@ void main() {
       expect(controller.status, equals(IdentityStatus.ready));
       expect(find.byType(AdaptiveShell), findsOneWidget);
       expect(find.text('Active Persona'), findsOneWidget);
+
+      await controller.setPersonaLabel(
+        controller.selectedIdentity!,
+        'Primary Node',
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.byKey(const Key('home_active_persona_label')),
+        findsOneWidget,
+      );
+      expect(find.text('Primary Node'), findsOneWidget);
     },
   );
 }

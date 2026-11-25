@@ -580,6 +580,13 @@ void main() {
   testWidgets(
     'DeviceHandoffScreen keeps Accept Handoff disabled until Inspect Bundle succeeds',
     (tester) async {
+      tester.view.physicalSize = const Size(390, 640);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+
       final controller = IdentityController(
         keyring: InMemoryKeyringService(),
         storage: InMemorySnapshotStorageService(),
@@ -616,13 +623,12 @@ void main() {
         of: find.byKey(const Key('inspect_handoff_bundle_button')),
         matching: find.byType(Card),
       );
+      final banner = find.byKey(const Key('handoff_error_banner'));
       expect(
-        find.descendant(
-          of: inboundCard,
-          matching: find.byKey(const Key('handoff_error_banner')),
-        ),
+        find.descendant(of: inboundCard, matching: banner),
         findsOneWidget,
       );
+      expect(tester.getBottomLeft(banner).dy, lessThanOrEqualTo(640));
     },
   );
 }

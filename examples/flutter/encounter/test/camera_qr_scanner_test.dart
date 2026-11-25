@@ -1,3 +1,4 @@
+import 'package:encounter/features/encounter/camera_qr_scanner_screen.dart';
 import 'package:encounter/features/encounter/two_device_encounter_screen.dart';
 import 'package:encounter/features/encounter/widgets/encounter_payload_input.dart';
 import 'package:encounter/services/encounter_session.dart';
@@ -227,6 +228,71 @@ void main() {
         find.byKey(const Key('encounter_scanner_fallback_notice')),
         findsNothing,
       );
+    },
+  );
+
+  testWidgets(
+    'CameraQrScannerScreen shows Camera Unavailable and hides instruction footer when no camera exists',
+    (tester) async {
+      const instruction =
+          'Point your camera at your peer\'s Step 1 Offer QR code.';
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CameraQrScannerScreen(
+            title: 'Scan Offer',
+            instruction: instruction,
+            availableCamerasLoader: () async => const [],
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Camera Unavailable'), findsOneWidget);
+      expect(
+        find.byKey(const Key('camera_scanner_open_settings_button')),
+        findsNothing,
+      );
+      expect(find.text(instruction), findsNothing);
+      expect(
+        find.byKey(const Key('camera_scanner_manual_fallback_button')),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'CameraQrScannerScreen shows Camera Access Required with Open Settings and hides instruction footer on permission denial',
+    (tester) async {
+      const instruction =
+          'Point your camera at your peer\'s Step 1 Offer QR code.';
+      var openedSettings = false;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: CameraQrScannerScreen(
+            title: 'Scan Offer',
+            instruction: instruction,
+            availableCamerasLoader: () async {
+              throw Exception('CameraAccessDenied: User denied camera access');
+            },
+            openAppSettings: () async {
+              openedSettings = true;
+            },
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Camera Access Required'), findsOneWidget);
+      expect(find.text('Camera Unavailable'), findsNothing);
+      expect(find.text(instruction), findsNothing);
+
+      final settingsBtn = find.byKey(
+        const Key('camera_scanner_open_settings_button'),
+      );
+      expect(settingsBtn, findsOneWidget);
+      await tester.tap(settingsBtn);
+      await tester.pump();
+      expect(openedSettings, isTrue);
     },
   );
 }

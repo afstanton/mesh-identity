@@ -27,11 +27,35 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
   final TextEditingController _inboundBundleController =
       TextEditingController();
 
+  final GlobalKey _errorBannerKey = GlobalKey();
+
   bool _isBusy = false;
   String? _statusMessage;
   String? _errorMessage;
   _HandoffErrorSection _errorSection = _HandoffErrorSection.status;
   HandoffBundle? _inspectedInboundBundle;
+
+  void _scheduleScrollToError() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final ctx = _errorBannerKey.currentContext;
+      if (mounted && ctx != null) {
+        Scrollable.ensureVisible(
+          ctx,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+          alignment: 0.5,
+        );
+      }
+    });
+  }
+
+  void _setError(_HandoffErrorSection section, String message) {
+    setState(() {
+      _errorSection = section;
+      _errorMessage = message;
+    });
+    _scheduleScrollToError();
+  }
 
   @override
   void dispose() {
@@ -79,16 +103,13 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
       });
     } on MeshIdentityException catch (e) {
       if (!mounted) return;
-      setState(() {
-        _errorSection = _HandoffErrorSection.status;
-        _errorMessage = e.message;
-      });
+      _setError(_HandoffErrorSection.status, e.message);
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _errorSection = _HandoffErrorSection.status;
-        _errorMessage = 'Failed to generate device ID: $e';
-      });
+      _setError(
+        _HandoffErrorSection.status,
+        'Failed to generate device ID: $e',
+      );
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
@@ -104,21 +125,17 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
     try {
       recipientNonce = parseDeviceNonceHex(_recipientNonceController.text);
     } on FormatException catch (e) {
-      setState(() {
-        _errorSection = _HandoffErrorSection.outbound;
-        _errorMessage = e.message;
-      });
+      _setError(_HandoffErrorSection.outbound, e.message);
       return;
     }
 
     final localNonce = widget.controller.deviceNonce;
     if (localNonce != null && listEquals(localNonce, recipientNonce)) {
-      setState(() {
-        _errorSection = _HandoffErrorSection.outbound;
-        _errorMessage =
-            'Cannot transfer to this device\'s own ID. '
-            'Enter the receiving device\'s ID.';
-      });
+      _setError(
+        _HandoffErrorSection.outbound,
+        'Cannot transfer to this device\'s own ID. '
+        'Enter the receiving device\'s ID.',
+      );
       return;
     }
 
@@ -184,29 +201,22 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
       });
     } on NotVotingDeviceException {
       if (!mounted) return;
-      setState(() {
-        _errorSection = _HandoffErrorSection.outbound;
-        _errorMessage =
-            'This device is not currently active for the selected persona.';
-      });
+      _setError(
+        _HandoffErrorSection.outbound,
+        'This device is not currently active for the selected persona.',
+      );
     } on HandoffWriteFailedException catch (e) {
       if (!mounted) return;
-      setState(() {
-        _errorSection = _HandoffErrorSection.outbound;
-        _errorMessage = 'Handoff persistence failed: ${e.message}';
-      });
+      _setError(
+        _HandoffErrorSection.outbound,
+        'Handoff persistence failed: ${e.message}',
+      );
     } on MeshIdentityException catch (e) {
       if (!mounted) return;
-      setState(() {
-        _errorSection = _HandoffErrorSection.outbound;
-        _errorMessage = e.message;
-      });
+      _setError(_HandoffErrorSection.outbound, e.message);
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _errorSection = _HandoffErrorSection.outbound;
-        _errorMessage = 'Failed to begin handoff: $e';
-      });
+      _setError(_HandoffErrorSection.outbound, 'Failed to begin handoff: $e');
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
@@ -248,16 +258,13 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
       });
     } on MeshIdentityException catch (e) {
       if (!mounted) return;
-      setState(() {
-        _errorSection = _HandoffErrorSection.outbound;
-        _errorMessage = e.message;
-      });
+      _setError(_HandoffErrorSection.outbound, e.message);
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _errorSection = _HandoffErrorSection.outbound;
-        _errorMessage = 'Failed to clear pending bundle: $e';
-      });
+      _setError(
+        _HandoffErrorSection.outbound,
+        'Failed to clear pending bundle: $e',
+      );
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
@@ -279,12 +286,14 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
         _errorSection = _HandoffErrorSection.inbound;
         _errorMessage = e.message;
       });
+      _scheduleScrollToError();
     } on MeshIdentityException catch (e) {
       setState(() {
         _inspectedInboundBundle = null;
         _errorSection = _HandoffErrorSection.inbound;
         _errorMessage = 'Invalid handoff bundle: ${e.message}';
       });
+      _scheduleScrollToError();
     }
   }
 
@@ -300,16 +309,13 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
           _inspectedInboundBundle ??
           decodeHandoffBundle(_inboundBundleController.text);
     } on FormatException catch (e) {
-      setState(() {
-        _errorSection = _HandoffErrorSection.inbound;
-        _errorMessage = e.message;
-      });
+      _setError(_HandoffErrorSection.inbound, e.message);
       return;
     } on MeshIdentityException catch (e) {
-      setState(() {
-        _errorSection = _HandoffErrorSection.inbound;
-        _errorMessage = 'Invalid handoff bundle: ${e.message}';
-      });
+      _setError(
+        _HandoffErrorSection.inbound,
+        'Invalid handoff bundle: ${e.message}',
+      );
       return;
     }
 
@@ -325,6 +331,7 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
             '${shortHexKey(bundle.identity)}. Import its signing seed in '
             'Identity before accepting this handoff.';
       });
+      _scheduleScrollToError();
       return;
     }
 
@@ -341,43 +348,35 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
       });
     } on WrongHandoffRecipientException {
       if (!mounted) return;
-      setState(() {
-        _errorSection = _HandoffErrorSection.inbound;
-        _errorMessage =
-            'This transfer bundle is addressed to a different device ID.';
-      });
+      _setError(
+        _HandoffErrorSection.inbound,
+        'This transfer bundle is addressed to a different device ID.',
+      );
     } on StaleHandoffException {
       if (!mounted) return;
-      setState(() {
-        _errorSection = _HandoffErrorSection.inbound;
-        _errorMessage =
-            'This transfer bundle is out of date (a newer transfer has '
-            'already been used on this device).';
-      });
+      _setError(
+        _HandoffErrorSection.inbound,
+        'This transfer bundle is out of date (a newer transfer has '
+        'already been used on this device).',
+      );
     } on InvalidHandoffException catch (e) {
       if (!mounted) return;
-      setState(() {
-        _errorSection = _HandoffErrorSection.inbound;
-        _errorMessage = 'Handoff authentication failed: ${e.message}';
-      });
+      _setError(
+        _HandoffErrorSection.inbound,
+        'Handoff authentication failed: ${e.message}',
+      );
     } on HandoffWriteFailedException catch (e) {
       if (!mounted) return;
-      setState(() {
-        _errorSection = _HandoffErrorSection.inbound;
-        _errorMessage = 'Handoff persistence failed: ${e.message}';
-      });
+      _setError(
+        _HandoffErrorSection.inbound,
+        'Handoff persistence failed: ${e.message}',
+      );
     } on MeshIdentityException catch (e) {
       if (!mounted) return;
-      setState(() {
-        _errorSection = _HandoffErrorSection.inbound;
-        _errorMessage = e.message;
-      });
+      _setError(_HandoffErrorSection.inbound, e.message);
     } catch (e) {
       if (!mounted) return;
-      setState(() {
-        _errorSection = _HandoffErrorSection.inbound;
-        _errorMessage = 'Failed to accept handoff: $e';
-      });
+      _setError(_HandoffErrorSection.inbound, 'Failed to accept handoff: $e');
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
@@ -407,6 +406,7 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
 
   Widget _buildInlineErrorBanner(ThemeData theme) {
     return Padding(
+      key: _errorBannerKey,
       padding: const EdgeInsets.only(top: 12),
       child: Container(
         key: const Key('handoff_error_banner'),
@@ -548,13 +548,15 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
-                Expanded(
-                  child: Text(
-                    'Device Transfer Status',
-                    style: theme.textTheme.titleMedium,
-                  ),
+                Text(
+                  'Device Transfer Status',
+                  style: theme.textTheme.titleMedium,
                 ),
                 if (state != null)
                   Chip(

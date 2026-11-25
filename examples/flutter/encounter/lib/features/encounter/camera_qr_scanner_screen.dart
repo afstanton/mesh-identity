@@ -1,8 +1,11 @@
 import 'dart:async';
 
+import 'package:bluetooth_low_energy/bluetooth_low_energy.dart';
+import 'package:camera/camera.dart' show CameraDescription, availableCameras;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_zxing/flutter_zxing.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../services/qr_scanner_service.dart';
 
@@ -66,6 +69,8 @@ class CameraQrScannerScreen extends StatefulWidget {
   final String instruction;
   final Listenable? sessionListenable;
   final bool Function()? isSessionActive;
+  final Future<List<CameraDescription>> Function()? availableCamerasLoader;
+  final Future<void> Function()? openAppSettings;
 
   const CameraQrScannerScreen({
     super.key,
@@ -73,13 +78,16 @@ class CameraQrScannerScreen extends StatefulWidget {
     required this.instruction,
     this.sessionListenable,
     this.isSessionActive,
+    this.availableCamerasLoader,
+    this.openAppSettings,
   });
 
   @override
   State<CameraQrScannerScreen> createState() => _CameraQrScannerScreenState();
 }
 
-class _CameraQrScannerScreenState extends State<CameraQrScannerScreen> {
+class _CameraQrScannerScreenState extends State<CameraQrScannerScreen>
+    with WidgetsBindingObserver {
   static const String _invalidQrHint =
       'Not an Encounter QR code. '
       'Point the camera at your peer\'s Encounter QR.';
@@ -95,22 +103,17 @@ class _CameraQrScannerScreenState extends State<CameraQrScannerScreen> {
 
   bool _hasCompleted = false;
   bool _permissionDenied = false;
-  bool _controllerReady = false;
-  Timer? _initTimeoutTimer;
+  bool _probingCameras = true;
+  int _scannerAttempt = 0;
   String? _cameraError;
   String? _scanHint;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     widget.sessionListenable?.addListener(_onSessionChanged);
-    _initTimeoutTimer = Timer(const Duration(seconds: 2), () {
-      if (!mounted || _controllerReady || _cameraError != null) return;
-      setState(() {
-        _cameraError =
-            'Camera unavailable on this device. Use manual paste instead.';
-      });
-    });
+    unawaited(_probeCameras());
   }
 
   @override
@@ -124,9 +127,87 @@ class _CameraQrScannerScreenState extends State<CameraQrScannerScreen> {
 
   @override
   void dispose() {
-    _initTimeoutTimer?.cancel();
+    WidgetsBinding.instance.removeObserver(this);
     widget.sessionListenable?.removeListener(_onSessionChanged);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed &&
+        _permissionDenied &&
+        mounted &&
+        !_hasCompleted) {
+      setState(() {
+        _permissionDenied = false;
+        _cameraError = null;
+        _probingCameras = true;
+        _scannerAttempt++;
+      });
+      unawaited(_probeCameras());
+    }
+  }
+
+  Future<void> _probeCameras() async {
+    try {
+      final loader = widget.availableCamerasLoader ?? availableCameras;
+      final cameras = await loader();
+      if (!mounted) return;
+      if (cameras.isEmpty) {
+        setState(() {
+          _probingCameras = false;
+          _permissionDenied = false;
+          _cameraError =
+              'No camera was found on this device. Use manual paste instead.';
+        });
+        return;
+      }
+      setState(() {
+        _probingCameras = false;
+      });
+    } on Exception catch (e) {
+      if (!mounted) return;
+      final isPermission = _isPermissionException(e);
+      setState(() {
+        _probingCameras = false;
+        _permissionDenied = isPermission;
+        _cameraError = isPermission
+            ? 'Camera permission was denied. Allow camera access in system '
+                  'settings to scan QR codes, or enter the code manually.'
+            : 'Camera unavailable on this device. Use manual paste instead.';
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _probingCameras = false;
+        _permissionDenied = false;
+        _cameraError =
+            'Camera unavailable on this device. Use manual paste instead.';
+      });
+    }
+  }
+
+  Future<void> _openSettings() async {
+    final customOpener = widget.openAppSettings;
+    if (customOpener != null) {
+      await customOpener();
+      return;
+    }
+    try {
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.macOS) {
+        await launchUrl(
+          Uri.parse(
+            'x-apple.systempreferences:com.apple.preference.security?Privacy_Camera',
+          ),
+        );
+      } else if (!kIsWeb &&
+          (defaultTargetPlatform == TargetPlatform.android ||
+              defaultTargetPlatform == TargetPlatform.iOS)) {
+        await CentralManager().showAppSettings();
+      }
+    } catch (_) {
+      // Best-effort settings navigation.
+    }
   }
 
   void _onSessionChanged() {
@@ -157,14 +238,13 @@ class _CameraQrScannerScreenState extends State<CameraQrScannerScreen> {
     Exception? error,
   ) {
     if (!mounted) return;
-    _initTimeoutTimer?.cancel();
     if (error != null) {
       final isPermission = _isPermissionException(error);
       setState(() {
         _permissionDenied = isPermission;
         _cameraError = isPermission
-            ? 'Camera permission was denied. Check system settings to allow '
-                  'camera access, or paste the Encounter URI manually.'
+            ? 'Camera permission was denied. Allow camera access in system '
+                  'settings to scan QR codes, or enter the code manually.'
             : 'Unable to start camera ($error). Check system settings or '
                   'paste the Encounter URI manually instead.';
       });
@@ -177,7 +257,6 @@ class _CameraQrScannerScreenState extends State<CameraQrScannerScreen> {
       });
       return;
     }
-    setState(() => _controllerReady = true);
   }
 
   void _handleScan(Code result) {
@@ -265,6 +344,20 @@ class _CameraQrScannerScreenState extends State<CameraQrScannerScreen> {
                                       color: theme.colorScheme.onSurfaceVariant,
                                     ),
                                   ),
+                                  if (_permissionDenied) ...[
+                                    const SizedBox(height: 16),
+                                    FilledButton.icon(
+                                      key: const Key(
+                                        'camera_scanner_open_settings_button',
+                                      ),
+                                      onPressed: _openSettings,
+                                      icon: const Icon(
+                                        Icons.settings_outlined,
+                                        size: 18,
+                                      ),
+                                      label: const Text('Open Settings'),
+                                    ),
+                                  ],
                                 ],
                               ),
                             ),
@@ -272,12 +365,18 @@ class _CameraQrScannerScreenState extends State<CameraQrScannerScreen> {
                         ),
                       ),
                     )
+                  : _probingCameras
+                  ? const ColoredBox(
+                      color: Colors.black,
+                      child: Center(child: CircularProgressIndicator()),
+                    )
                   : ColoredBox(
                       color: Colors.black,
                       child: Stack(
                         fit: StackFit.expand,
                         children: [
                           ReaderWidget(
+                            key: ValueKey(_scannerAttempt),
                             codeFormat: Format.qrCode,
                             resolution: _resolution,
                             showGallery: false,
@@ -326,12 +425,14 @@ class _CameraQrScannerScreenState extends State<CameraQrScannerScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Text(
-                      widget.instruction,
-                      textAlign: TextAlign.center,
-                      style: theme.textTheme.bodyMedium,
-                    ),
-                    const SizedBox(height: 12),
+                    if (errorText == null) ...[
+                      Text(
+                        widget.instruction,
+                        textAlign: TextAlign.center,
+                        style: theme.textTheme.bodyMedium,
+                      ),
+                      const SizedBox(height: 12),
+                    ],
                     OutlinedButton.icon(
                       key: const Key('camera_scanner_manual_fallback_button'),
                       onPressed: () => _complete(

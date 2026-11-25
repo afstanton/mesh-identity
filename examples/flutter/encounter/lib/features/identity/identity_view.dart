@@ -712,6 +712,10 @@ class _ImportPersonaSeedDialogState extends State<_ImportPersonaSeedDialog> {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final normalizedLen = _seedController.text
+        .replaceAll(RegExp(r'\s+'), '')
+        .replaceFirst(RegExp(r'^0[xX]'), '')
+        .length;
     return AlertDialog(
       title: const Text('Import Backup Key'),
       content: SizedBox(
@@ -733,10 +737,13 @@ class _ImportPersonaSeedDialogState extends State<_ImportPersonaSeedDialog> {
               maxLines: 1,
               obscureText: true,
               style: AppTheme.monospaceStyle(context),
+              onChanged: (_) => setState(() => _errorMessage = null),
               decoration: InputDecoration(
-                labelText: 'Persona Seed (64 hex chars)',
+                labelText: 'Backup Key (64 hex chars)',
                 border: const OutlineInputBorder(),
+                helperText: '$normalizedLen / 64 characters',
                 errorText: _errorMessage,
+                errorMaxLines: 2,
               ),
             ),
           ],

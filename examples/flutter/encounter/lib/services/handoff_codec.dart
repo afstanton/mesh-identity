@@ -77,7 +77,5 @@ Uint8List parseDeviceNonceHex(String input) => _parse32ByteHex(
 );
 
 /// Parse a 32-byte Ed25519 persona seed from a 64-character hexadecimal string.
-Uint8List parseHexSeed(String input) => _parse32ByteHex(
-  input,
-  'Enter a 64-character hexadecimal Ed25519 persona seed.',
-);
+Uint8List parseHexSeed(String input) =>
+    _parse32ByteHex(input, 'Enter a 64-character hexadecimal backup key.');

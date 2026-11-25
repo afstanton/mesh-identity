@@ -146,4 +146,52 @@ void main() {
     );
     expect(addButton.onPressed, isNull);
   });
+
+  testWidgets(
+    'Import Backup Key dialog shows live 64-char counter, plain error, and clears error on edit',
+    (tester) async {
+      final controller = IdentityController(
+        keyring: InMemoryKeyringService(),
+        storage: InMemorySnapshotStorageService(),
+        clock: _FakeClock().call,
+      );
+      addTearDown(controller.dispose);
+      await controller.initialize();
+
+      await tester.pumpWidget(_wrap(controller));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const Key('import_persona_seed_button')));
+      await tester.pumpAndSettle();
+
+      expect(find.text('0 / 64 characters'), findsOneWidget);
+      await tester.enterText(
+        find.byKey(const Key('import_persona_seed_field')),
+        'abcd',
+      );
+      await tester.pump();
+      expect(find.text('4 / 64 characters'), findsOneWidget);
+
+      await tester.tap(
+        find.byKey(const Key('confirm_import_persona_seed_button')),
+      );
+      await tester.pumpAndSettle();
+      expect(
+        find.text('Enter a 64-character hexadecimal backup key.'),
+        findsOneWidget,
+      );
+      expect(find.textContaining('Ed25519'), findsNothing);
+
+      await tester.enterText(
+        find.byKey(const Key('import_persona_seed_field')),
+        'abcde',
+      );
+      await tester.pumpAndSettle();
+      expect(find.text('5 / 64 characters'), findsOneWidget);
+      expect(
+        find.text('Enter a 64-character hexadecimal backup key.'),
+        findsNothing,
+      );
+    },
+  );
 }

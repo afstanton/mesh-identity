@@ -11,6 +11,10 @@ class AdaptiveShell extends StatelessWidget {
   /// Viewport width at which navigation switches from bottom bar to side rail.
   static const double railBreakpoint = 720;
 
+  /// Minimum viewport height required for the vertical navigation rail so short
+  /// phone landscape viewports keep bottom navigation instead of overflowing.
+  static const double minRailHeight = 480;
+
   /// Viewport width at which the desktop navigation rail expands to show labels inline.
   static const double extendedRailBreakpoint = 1080;
 
@@ -45,9 +49,10 @@ class AdaptiveShell extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final width = MediaQuery.sizeOf(context).width;
-    final useRail = width >= railBreakpoint;
-    final extendedRail = width >= extendedRailBreakpoint;
+    final size = MediaQuery.sizeOf(context);
+    final useRail =
+        size.width >= railBreakpoint && size.height >= minRailHeight;
+    final extendedRail = size.width >= extendedRailBreakpoint;
 
     if (!useRail) {
       final platform = Theme.of(context).platform;

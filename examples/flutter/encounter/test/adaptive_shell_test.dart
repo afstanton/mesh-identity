@@ -376,5 +376,34 @@ void main() {
         expect(tester.getTopLeft(headerTitle).dy, greaterThanOrEqualTo(24.0));
       },
     );
+
+    testWidgets(
+      'short phone landscape viewport uses NavigationBar without overflowing rail',
+      (WidgetTester tester) async {
+        setViewport(tester, const Size(874, 402));
+        final controller = await createReadyController();
+
+        await tester.pumpWidget(
+          EncounterApp(
+            controller: controller,
+            linkLauncher: FakeLinkLauncher(),
+            initialDestination: AppDestination.encounter,
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byType(NavigationBar), findsOneWidget);
+        expect(find.byType(NavigationRail), findsNothing);
+
+        await tester.tap(
+          find.descendant(
+            of: find.byType(NavigationBar),
+            matching: find.text('Identity'),
+          ),
+        );
+        await tester.pumpAndSettle();
+        expect(find.byType(IdentityView), findsOneWidget);
+      },
+    );
   });
 }

@@ -125,7 +125,7 @@ class _EncounterHomeViewState extends State<EncounterHomeView> {
         : Duration.zero;
 
     return SingleChildScrollView(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
       child: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 760),

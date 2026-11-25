@@ -426,11 +426,14 @@ void main() {
       expect(deviceB.selectedVotingState, VotingState.voting);
       expect(deviceB.selectedVotingRecord?.counter, BigInt.one);
       await tester.scrollUntilVisible(
-        find.text('Voting (Counter 1)'),
+        find.text('Active on this device'),
         -300,
         scrollable: find.byType(Scrollable).first,
       );
-      expect(find.text('Voting (Counter 1)'), findsOneWidget);
+      expect(find.text('Active on this device'), findsOneWidget);
+      await tester.tap(find.byKey(const Key('handoff_advanced_details_tile')));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('Counter 1'), findsOneWidget);
     },
   );
 
@@ -605,6 +608,21 @@ void main() {
         find.byKey(const Key('accept_handoff_button')),
       );
       expect(acceptBtn.onPressed, isNull);
+
+      await tester.tap(find.byKey(const Key('inspect_handoff_bundle_button')));
+      await tester.pumpAndSettle();
+
+      final inboundCard = find.ancestor(
+        of: find.byKey(const Key('inspect_handoff_bundle_button')),
+        matching: find.byType(Card),
+      );
+      expect(
+        find.descendant(
+          of: inboundCard,
+          matching: find.byKey(const Key('handoff_error_banner')),
+        ),
+        findsOneWidget,
+      );
     },
   );
 }

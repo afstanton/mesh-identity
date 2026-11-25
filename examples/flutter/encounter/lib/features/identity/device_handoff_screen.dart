@@ -19,23 +19,22 @@ class DeviceHandoffScreen extends StatefulWidget {
   State<DeviceHandoffScreen> createState() => _DeviceHandoffScreenState();
 }
 
+enum _HandoffErrorSection { status, outbound, inbound }
+
 class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
   final TextEditingController _recipientNonceController =
       TextEditingController();
   final TextEditingController _inboundBundleController =
       TextEditingController();
 
-  final ScrollController _scrollController = ScrollController();
-
   bool _isBusy = false;
   String? _statusMessage;
   String? _errorMessage;
-  String? _lastScrolledError;
+  _HandoffErrorSection _errorSection = _HandoffErrorSection.status;
   HandoffBundle? _inspectedInboundBundle;
 
   @override
   void dispose() {
-    _scrollController.dispose();
     _recipientNonceController.dispose();
     _inboundBundleController.dispose();
     super.dispose();
@@ -76,14 +75,20 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
       await widget.controller.ensureDeviceNonce();
       if (!mounted) return;
       setState(() {
-        _statusMessage = 'Device nonce generated and saved.';
+        _statusMessage = 'Device ID generated and saved.';
       });
     } on MeshIdentityException catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = e.message);
+      setState(() {
+        _errorSection = _HandoffErrorSection.status;
+        _errorMessage = e.message;
+      });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = 'Failed to generate device nonce: $e');
+      setState(() {
+        _errorSection = _HandoffErrorSection.status;
+        _errorMessage = 'Failed to generate device ID: $e';
+      });
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
@@ -99,16 +104,20 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
     try {
       recipientNonce = parseDeviceNonceHex(_recipientNonceController.text);
     } on FormatException catch (e) {
-      setState(() => _errorMessage = e.message);
+      setState(() {
+        _errorSection = _HandoffErrorSection.outbound;
+        _errorMessage = e.message;
+      });
       return;
     }
 
     final localNonce = widget.controller.deviceNonce;
     if (localNonce != null && listEquals(localNonce, recipientNonce)) {
       setState(() {
+        _errorSection = _HandoffErrorSection.outbound;
         _errorMessage =
-            'Cannot hand off to this device\'s own nonce. '
-            'Enter the receiving device\'s nonce.';
+            'Cannot transfer to this device\'s own ID. '
+            'Enter the receiving device\'s ID.';
       });
       return;
     }
@@ -176,21 +185,28 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
     } on NotVotingDeviceException {
       if (!mounted) return;
       setState(() {
+        _errorSection = _HandoffErrorSection.outbound;
         _errorMessage =
-            'This device does not currently hold the voting role for the '
-            'active persona.';
+            'This device is not currently active for the selected persona.';
       });
     } on HandoffWriteFailedException catch (e) {
       if (!mounted) return;
-      setState(
-        () => _errorMessage = 'Handoff persistence failed: ${e.message}',
-      );
+      setState(() {
+        _errorSection = _HandoffErrorSection.outbound;
+        _errorMessage = 'Handoff persistence failed: ${e.message}';
+      });
     } on MeshIdentityException catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = e.message);
+      setState(() {
+        _errorSection = _HandoffErrorSection.outbound;
+        _errorMessage = e.message;
+      });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = 'Failed to begin handoff: $e');
+      setState(() {
+        _errorSection = _HandoffErrorSection.outbound;
+        _errorMessage = 'Failed to begin handoff: $e';
+      });
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
@@ -232,10 +248,16 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
       });
     } on MeshIdentityException catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = e.message);
+      setState(() {
+        _errorSection = _HandoffErrorSection.outbound;
+        _errorMessage = e.message;
+      });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = 'Failed to clear pending bundle: $e');
+      setState(() {
+        _errorSection = _HandoffErrorSection.outbound;
+        _errorMessage = 'Failed to clear pending bundle: $e';
+      });
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
@@ -254,11 +276,13 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
     } on FormatException catch (e) {
       setState(() {
         _inspectedInboundBundle = null;
+        _errorSection = _HandoffErrorSection.inbound;
         _errorMessage = e.message;
       });
     } on MeshIdentityException catch (e) {
       setState(() {
         _inspectedInboundBundle = null;
+        _errorSection = _HandoffErrorSection.inbound;
         _errorMessage = 'Invalid handoff bundle: ${e.message}';
       });
     }
@@ -276,10 +300,16 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
           _inspectedInboundBundle ??
           decodeHandoffBundle(_inboundBundleController.text);
     } on FormatException catch (e) {
-      setState(() => _errorMessage = e.message);
+      setState(() {
+        _errorSection = _HandoffErrorSection.inbound;
+        _errorMessage = e.message;
+      });
       return;
     } on MeshIdentityException catch (e) {
-      setState(() => _errorMessage = 'Invalid handoff bundle: ${e.message}');
+      setState(() {
+        _errorSection = _HandoffErrorSection.inbound;
+        _errorMessage = 'Invalid handoff bundle: ${e.message}';
+      });
       return;
     }
 
@@ -289,6 +319,7 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
     if (!hasPersona) {
       setState(() {
         _inspectedInboundBundle = bundle;
+        _errorSection = _HandoffErrorSection.inbound;
         _errorMessage =
             'This device does not hold persona '
             '${shortHexKey(bundle.identity)}. Import its signing seed in '
@@ -305,38 +336,48 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
         _inspectedInboundBundle = null;
         _inboundBundleController.clear();
         _statusMessage =
-            'Handoff accepted. Device voting state is now '
+            'Transfer accepted. Device status is now '
             '${_votingStateLabel(newState)}.';
       });
     } on WrongHandoffRecipientException {
       if (!mounted) return;
       setState(() {
+        _errorSection = _HandoffErrorSection.inbound;
         _errorMessage =
-            'This handoff bundle is addressed to a different device nonce.';
+            'This transfer bundle is addressed to a different device ID.';
       });
     } on StaleHandoffException {
       if (!mounted) return;
       setState(() {
+        _errorSection = _HandoffErrorSection.inbound;
         _errorMessage =
-            'This handoff bundle is stale (counter is not higher than this '
-            'device\'s current counter).';
+            'This transfer bundle is out of date (a newer transfer has '
+            'already been used on this device).';
       });
     } on InvalidHandoffException catch (e) {
       if (!mounted) return;
       setState(() {
+        _errorSection = _HandoffErrorSection.inbound;
         _errorMessage = 'Handoff authentication failed: ${e.message}';
       });
     } on HandoffWriteFailedException catch (e) {
       if (!mounted) return;
-      setState(
-        () => _errorMessage = 'Handoff persistence failed: ${e.message}',
-      );
+      setState(() {
+        _errorSection = _HandoffErrorSection.inbound;
+        _errorMessage = 'Handoff persistence failed: ${e.message}';
+      });
     } on MeshIdentityException catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = e.message);
+      setState(() {
+        _errorSection = _HandoffErrorSection.inbound;
+        _errorMessage = e.message;
+      });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = 'Failed to accept handoff: $e');
+      setState(() {
+        _errorSection = _HandoffErrorSection.inbound;
+        _errorMessage = 'Failed to accept handoff: $e';
+      });
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
@@ -344,41 +385,48 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
 
   static String _votingStateLabel(VotingState state) {
     return switch (state) {
-      VotingState.voting => 'Voting',
-      VotingState.stopped => 'Stopped',
-      VotingState.gated => 'Gated',
+      VotingState.voting => 'Active on this device',
+      VotingState.stopped => 'Transferred away',
+      VotingState.gated => 'Waiting for transfer',
     };
   }
 
   static String _votingStateDescription(VotingState state) {
     return switch (state) {
       VotingState.voting =>
-        'This device holds the monotonic voting role and may sign or hand off.',
+        'This device is active for this persona and can sign or transfer to '
+            'another device.',
       VotingState.stopped =>
-        'This device handed off the voting role and must not sign at this '
-            'counter. Only a higher-counter handoff can return the role.',
+        'This persona was transferred to another device. Only a newer transfer '
+            'can reactivate this device.',
       VotingState.gated =>
-        'This device cannot vote until a higher-counter handoff or '
-            'recognition unlocks it.',
+        'This device cannot act for this persona yet. Accept a transfer '
+            'bundle from your active device to activate it.',
     };
+  }
+
+  Widget _buildInlineErrorBanner(ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Container(
+        key: const Key('handoff_error_banner'),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.errorContainer,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          _errorMessage!,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onErrorContainer,
+          ),
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_errorMessage == null) {
-      _lastScrolledError = null;
-    } else if (_errorMessage != _lastScrolledError) {
-      _lastScrolledError = _errorMessage;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _scrollController.hasClients) {
-          _scrollController.animateTo(
-            0,
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOut,
-          );
-        }
-      });
-    }
     return Scaffold(
       appBar: AppBar(title: const Text('Transfer Device')),
       body: SafeArea(
@@ -401,9 +449,8 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
             return Align(
               alignment: Alignment.topCenter,
               child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 820),
+                constraints: const BoxConstraints(maxWidth: 720),
                 child: ListView(
-                  controller: _scrollController,
                   padding: const EdgeInsets.all(20),
                   children: [
                     if (encounterActive) ...[
@@ -416,22 +463,6 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
                             'ceremony is active.',
                             style: theme.textTheme.bodySmall?.copyWith(
                               color: theme.colorScheme.onSecondaryContainer,
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                    ],
-                    if (_errorMessage != null) ...[
-                      Card(
-                        key: const Key('handoff_error_banner'),
-                        color: theme.colorScheme.errorContainer,
-                        child: Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: Text(
-                            _errorMessage!,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: theme.colorScheme.onErrorContainer,
                             ),
                           ),
                         ),
@@ -528,10 +559,7 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
                 if (state != null)
                   Chip(
                     key: const Key('handoff_voting_state_chip'),
-                    label: Text(
-                      '${_votingStateLabel(state)} '
-                      '(Counter ${votingRecord!.counter})',
-                    ),
+                    label: Text(_votingStateLabel(state)),
                     visualDensity: VisualDensity.compact,
                   ),
               ],
@@ -553,12 +581,12 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
               ),
             ],
             const Divider(height: 24),
-            Text('This Device Nonce', style: theme.textTheme.labelMedium),
+            Text('This Device ID', style: theme.textTheme.labelMedium),
             const SizedBox(height: 6),
             if (deviceNonce == null) ...[
               Text(
-                'Not generated yet. Generate a persistent device nonce so '
-                'another device can address a handoff bundle here.',
+                'Not generated yet. Generate a device ID so another device '
+                'can send a transfer here.',
                 style: theme.textTheme.bodySmall?.copyWith(
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
@@ -568,7 +596,7 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
                 key: const Key('generate_device_nonce_button'),
                 onPressed: actionsDisabled ? null : _generateDeviceNonce,
                 icon: const Icon(Icons.fingerprint),
-                label: const Text('Generate Device Nonce'),
+                label: const Text('Generate Device ID'),
               ),
             ] else
               Container(
@@ -590,14 +618,52 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
                     ),
                     IconButton(
                       key: const Key('copy_device_nonce_button'),
-                      tooltip: 'Copy device nonce',
+                      tooltip: 'Copy device ID',
                       onPressed: () =>
-                          _copyText(formatHexKey(deviceNonce), 'Device nonce'),
+                          _copyText(formatHexKey(deviceNonce), 'Device ID'),
                       icon: const Icon(Icons.copy_outlined, size: 18),
                     ),
                   ],
                 ),
               ),
+            if (_errorMessage != null &&
+                _errorSection == _HandoffErrorSection.status)
+              _buildInlineErrorBanner(theme),
+            const SizedBox(height: 8),
+            ExpansionTile(
+              key: const Key('handoff_advanced_details_tile'),
+              tilePadding: EdgeInsets.zero,
+              childrenPadding: const EdgeInsets.only(bottom: 4),
+              title: Text(
+                'Technical details',
+                style: theme.textTheme.labelMedium,
+              ),
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      if (votingRecord != null) ...[
+                        Text(
+                          'Role state: ${votingRecord.state.name} '
+                          '(Counter ${votingRecord.counter})',
+                          style: theme.textTheme.bodySmall,
+                        ),
+                        const SizedBox(height: 4),
+                      ],
+                      Text(
+                        'A device ID is a persistent 32-byte nonce used to '
+                        'address transfer bundles to this specific device.',
+                        style: theme.textTheme.bodySmall?.copyWith(
+                          color: theme.colorScheme.onSurfaceVariant,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
       ),
@@ -623,15 +689,14 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(
-              'Send Voting Role (Outbound Handoff)',
+              'Send Transfer (Outbound)',
               style: theme.textTheme.titleMedium,
             ),
             const SizedBox(height: 6),
             Text(
-              'Enter the receiving device\'s 64-character hex device nonce. '
-              'The receiving device must already hold this persona. Initiating '
-              'a handoff permanently marks this device Stopped at the current '
-              'counter.',
+              'Enter the receiving device\'s 64-character device ID. '
+              'The receiving device must already hold this persona. Starting '
+              'a transfer marks this device as transferred away.',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: theme.colorScheme.onSurfaceVariant,
               ),
@@ -645,7 +710,7 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
               style: AppTheme.monospaceStyle(context).copyWith(fontSize: 13),
               onChanged: (_) => setState(() {}),
               decoration: const InputDecoration(
-                labelText: 'Recipient Device Nonce (64 hex chars)',
+                labelText: 'Recipient Device ID (64 hex chars)',
                 hintText: '0123abcd...',
                 border: OutlineInputBorder(),
               ),
@@ -663,7 +728,7 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
                       ? null
                       : () => _pasteInto(_recipientNonceController),
                   icon: const Icon(Icons.content_paste_outlined, size: 18),
-                  label: const Text('Paste Nonce'),
+                  label: const Text('Paste Device ID'),
                 ),
                 FilledButton.icon(
                   key: const Key('begin_handoff_button'),
@@ -673,6 +738,9 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
                 ),
               ],
             ),
+            if (_errorMessage != null &&
+                _errorSection == _HandoffErrorSection.outbound)
+              _buildInlineErrorBanner(theme),
             if (outbound != null) ...[
               const Divider(height: 24),
               Container(
@@ -827,6 +895,9 @@ class _DeviceHandoffScreenState extends State<DeviceHandoffScreen> {
                 ),
               ],
             ),
+            if (_errorMessage != null &&
+                _errorSection == _HandoffErrorSection.inbound)
+              _buildInlineErrorBanner(theme),
             if (preview != null) ...[
               const SizedBox(height: 14),
               Container(

@@ -348,5 +348,33 @@ void main() {
 
       expect(find.byType(PlatformMenuBar), findsNothing);
     });
+
+    testWidgets(
+      'wide layout applies top SafeArea padding so header stays below status bar',
+      (WidgetTester tester) async {
+        setViewport(tester, const Size(1024, 768));
+        final controller = await createReadyController();
+
+        await tester.pumpWidget(
+          MediaQuery(
+            data: const MediaQueryData(
+              size: Size(1024, 768),
+              padding: EdgeInsets.only(top: 24),
+            ),
+            child: EncounterApp(
+              controller: controller,
+              linkLauncher: FakeLinkLauncher(),
+              initialDestination: AppDestination.encounter,
+            ),
+          ),
+        );
+        await tester.pumpAndSettle();
+
+        expect(find.byType(NavigationRail), findsOneWidget);
+        final headerTitle = find.text('Encounter').last;
+        expect(headerTitle, findsOneWidget);
+        expect(tester.getTopLeft(headerTitle).dy, greaterThanOrEqualTo(24.0));
+      },
+    );
   });
 }

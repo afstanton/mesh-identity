@@ -20,6 +20,14 @@ class OpenPgpBridgeScreen extends StatefulWidget {
   State<OpenPgpBridgeScreen> createState() => _OpenPgpBridgeScreenState();
 }
 
+enum _OpenPgpErrorSection {
+  inspect,
+  export,
+  peerImport,
+  revocation,
+  ownedImport,
+}
+
 class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
   final TextEditingController _inspectController = TextEditingController();
   final TextEditingController _exportUidController = TextEditingController();
@@ -50,16 +58,13 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
   OpenPgpProvenance? _peerProvenance;
   OpenPgpProvenance? _ownedProvenance;
 
-  final ScrollController _scrollController = ScrollController();
-
   bool _isBusy = false;
   String? _errorMessage;
-  String? _lastScrolledError;
+  _OpenPgpErrorSection _errorSection = _OpenPgpErrorSection.inspect;
   String? _statusMessage;
 
   @override
   void dispose() {
-    _scrollController.dispose();
     _disposeActivePreview();
     _ownedCertController.clear();
     _ownedPassphraseController.clear();
@@ -109,11 +114,20 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
         _statusMessage = 'Certificate parsed (unauthenticated).';
       });
     } on FormatException catch (e) {
-      setState(() => _errorMessage = e.message);
+      setState(() {
+        _errorSection = _OpenPgpErrorSection.inspect;
+        _errorMessage = e.message;
+      });
     } on MeshIdentityException catch (e) {
-      setState(() => _errorMessage = e.message);
+      setState(() {
+        _errorSection = _OpenPgpErrorSection.inspect;
+        _errorMessage = e.message;
+      });
     } catch (e) {
-      setState(() => _errorMessage = 'Failed to inspect certificate: $e');
+      setState(() {
+        _errorSection = _OpenPgpErrorSection.inspect;
+        _errorMessage = 'Failed to inspect certificate: $e';
+      });
     }
   }
 
@@ -164,13 +178,22 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
       });
     } on FormatException catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = e.message);
+      setState(() {
+        _errorSection = _OpenPgpErrorSection.export;
+        _errorMessage = e.message;
+      });
     } on MeshIdentityException catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = e.message);
+      setState(() {
+        _errorSection = _OpenPgpErrorSection.export;
+        _errorMessage = e.message;
+      });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = 'Failed to create export preview: $e');
+      setState(() {
+        _errorSection = _OpenPgpErrorSection.export;
+        _errorMessage = 'Failed to create export preview: $e';
+      });
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
@@ -197,12 +220,14 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
       if (!mounted) return;
       setState(() {
         _activePreview = null;
+        _errorSection = _OpenPgpErrorSection.export;
         _errorMessage = e.message;
       });
     } catch (e) {
       if (!mounted) return;
       setState(() {
         _activePreview = null;
+        _errorSection = _OpenPgpErrorSection.export;
         _errorMessage = 'Failed to confirm OpenPGP export: $e';
       });
     } finally {
@@ -239,13 +264,22 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
       });
     } on FormatException catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = e.message);
+      setState(() {
+        _errorSection = _OpenPgpErrorSection.peerImport;
+        _errorMessage = e.message;
+      });
     } on MeshIdentityException catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = e.message);
+      setState(() {
+        _errorSection = _OpenPgpErrorSection.peerImport;
+        _errorMessage = e.message;
+      });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = 'Failed to import peer certificate: $e');
+      setState(() {
+        _errorSection = _OpenPgpErrorSection.peerImport;
+        _errorMessage = 'Failed to import peer certificate: $e';
+      });
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
@@ -270,13 +304,22 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
       });
     } on FormatException catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = e.message);
+      setState(() {
+        _errorSection = _OpenPgpErrorSection.revocation;
+        _errorMessage = e.message;
+      });
     } on MeshIdentityException catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = e.message);
+      setState(() {
+        _errorSection = _OpenPgpErrorSection.revocation;
+        _errorMessage = e.message;
+      });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = 'Failed to record revocation: $e');
+      setState(() {
+        _errorSection = _OpenPgpErrorSection.revocation;
+        _errorMessage = 'Failed to record revocation: $e';
+      });
     } finally {
       if (mounted) setState(() => _isBusy = false);
     }
@@ -319,13 +362,22 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
       });
     } on FormatException catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = e.message);
+      setState(() {
+        _errorSection = _OpenPgpErrorSection.ownedImport;
+        _errorMessage = e.message;
+      });
     } on MeshIdentityException catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = e.message);
+      setState(() {
+        _errorSection = _OpenPgpErrorSection.ownedImport;
+        _errorMessage = e.message;
+      });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _errorMessage = 'Failed to import owned secret key: $e');
+      setState(() {
+        _errorSection = _OpenPgpErrorSection.ownedImport;
+        _errorMessage = 'Failed to import owned secret key: $e';
+      });
     } finally {
       secretBytes?.fillRange(0, secretBytes.length, 0);
       if (mounted) setState(() => _isBusy = false);
@@ -348,22 +400,28 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
         .showSnackBar(SnackBar(content: Text('Copied $label (ASCII armor)')));
   }
 
+  Widget _buildInlineErrorBanner(ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 12),
+      child: Container(
+        key: const Key('openpgp_error_banner'),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.errorContainer,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          _errorMessage!,
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: theme.colorScheme.onErrorContainer,
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    if (_errorMessage == null) {
-      _lastScrolledError = null;
-    } else if (_errorMessage != _lastScrolledError) {
-      _lastScrolledError = _errorMessage;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted && _scrollController.hasClients) {
-          _scrollController.animateTo(
-            0,
-            duration: const Duration(milliseconds: 250),
-            curve: Curves.easeOut,
-          );
-        }
-      });
-    }
     return Scaffold(
       appBar: AppBar(title: const Text('OpenPGP Interoperability Bridge')),
       body: ListenableBuilder(
@@ -377,10 +435,9 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
           return Align(
             alignment: Alignment.topCenter,
             child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 820),
+              constraints: const BoxConstraints(maxWidth: 720),
               child: ListView(
                 key: const Key('openpgp_scroll_view'),
-                controller: _scrollController,
                 padding: const EdgeInsets.all(20),
                 children: [
                   if (encounterActive) ...[
@@ -394,22 +451,6 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
                           'Encounter ceremony is active.',
                           style: theme.textTheme.bodySmall?.copyWith(
                             color: theme.colorScheme.onSecondaryContainer,
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                  ],
-                  if (_errorMessage != null) ...[
-                    Card(
-                      key: const Key('openpgp_error_banner'),
-                      color: theme.colorScheme.errorContainer,
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Text(
-                          _errorMessage!,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: theme.colorScheme.onErrorContainer,
                           ),
                         ),
                       ),
@@ -483,6 +524,9 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
                 child: const Text('Inspect'),
               ),
             ),
+            if (_errorMessage != null &&
+                _errorSection == _OpenPgpErrorSection.inspect)
+              _buildInlineErrorBanner(theme),
             if (cert != null) ...[
               const SizedBox(height: 12),
               Container(
@@ -641,6 +685,9 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
                 child: const Text('Preview Export'),
               ),
             ),
+            if (_errorMessage != null &&
+                _errorSection == _OpenPgpErrorSection.export)
+              _buildInlineErrorBanner(theme),
             if (preview != null) ...[
               const SizedBox(height: 12),
               Card(
@@ -815,6 +862,9 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
                 child: const Text('Import Peer Contact'),
               ),
             ),
+            if (_errorMessage != null &&
+                _errorSection == _OpenPgpErrorSection.peerImport)
+              _buildInlineErrorBanner(theme),
             if (prov != null) ...[
               const SizedBox(height: 8),
               Text(
@@ -846,6 +896,9 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
                 child: const Text('Remember Revocations'),
               ),
             ),
+            if (_errorMessage != null &&
+                _errorSection == _OpenPgpErrorSection.revocation)
+              _buildInlineErrorBanner(theme),
           ],
         ),
       ),
@@ -936,6 +989,9 @@ class _OpenPgpBridgeScreenState extends State<OpenPgpBridgeScreen> {
                 child: const Text('Import Owned Key'),
               ),
             ),
+            if (_errorMessage != null &&
+                _errorSection == _OpenPgpErrorSection.ownedImport)
+              _buildInlineErrorBanner(theme),
             if (prov != null) ...[
               const SizedBox(height: 8),
               Text(

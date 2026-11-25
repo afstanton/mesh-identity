@@ -468,16 +468,7 @@ void main() {
         find.byKey(const Key('openpgp_remember_revocations_button')),
       );
       await tester.pumpAndSettle();
-      await tester.scrollUntilVisible(
-        find.byKey(const Key('openpgp_error_banner')),
-        -300,
-        scrollable: find
-            .descendant(
-              of: find.byKey(const Key('openpgp_scroll_view')),
-              matching: find.byType(Scrollable),
-            )
-            .first,
-      );
+      await tester.ensureVisible(find.byKey(const Key('openpgp_error_banner')));
       expect(find.byKey(const Key('openpgp_error_banner')), findsOneWidget);
     },
   );

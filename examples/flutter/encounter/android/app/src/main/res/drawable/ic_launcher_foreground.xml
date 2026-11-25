@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Verified shield emblem centered inside the 66dp adaptive safe zone -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,28L34,36.89V51.56C34,63.89 42.53,75.42 54,78.22C65.47,75.42 74,63.89 74,51.56V36.89L54,28ZM69.56,51.56C69.56,61.29 62.93,70.2 54,73.11C45.07,70.2 38.44,61.29 38.44,51.56V39.78L54,32.87L69.56,39.78V51.56Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M50.22,57.11L44.67,51.56L41.53,54.69L50.22,63.38L66.47,47.13L63.33,44L50.22,57.11Z" />
+</vector>

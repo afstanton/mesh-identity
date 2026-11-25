@@ -335,7 +335,7 @@ class _TwoDeviceEncounterScreenState extends State<TwoDeviceEncounterScreen>
                 padding: const EdgeInsets.all(20),
                 child: Center(
                   child: ConstrainedBox(
-                    constraints: const BoxConstraints(maxWidth: 820),
+                    constraints: const BoxConstraints(maxWidth: 720),
                     child: _buildPhaseBody(context, session, role, now),
                   ),
                 ),
